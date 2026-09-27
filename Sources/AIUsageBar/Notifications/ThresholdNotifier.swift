@@ -18,8 +18,8 @@ final class ThresholdNotifier {
         if let previous = lastNotifiedThreshold[key], previous >= crossed { return }
         lastNotifiedThreshold[key] = crossed
         notify(
-            title: "\(serviceName) \(windowLabel) Usage Alert",
-            message: "Usage is \(usedPercent)% (\(crossed)%+ threshold)"
+            title: "\(serviceName) \(windowLabel) 사용량 경고",
+            message: "사용률이 \(usedPercent)%입니다 (임계치 \(crossed)% 이상)"
         )
     }
 

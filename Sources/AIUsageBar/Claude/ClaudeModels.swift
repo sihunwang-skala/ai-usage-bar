@@ -21,8 +21,8 @@ enum ClaudeUsageMonitorReader {
 
         var errorDescription: String? {
             switch self {
-            case .fileNotFound: "Can't find usage-monitor.json. Use Claude Code at least once."
-            case .decodeFailed: "Couldn't parse usage-monitor.json."
+            case .fileNotFound: "usage-monitor.json을 찾을 수 없습니다. Claude Code를 한 번 이상 사용해 주세요."
+            case .decodeFailed: "usage-monitor.json 형식을 해석하지 못했습니다."
             }
         }
     }

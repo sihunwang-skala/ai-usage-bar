@@ -136,7 +136,7 @@ final class CodexAppServerClient: @unchecked Sendable {
                   let callback = pending.removeValue(forKey: id) else { continue }
 
             if let error = object["error"] as? [String: Any] {
-                callback(.failure(ClientError.serverError(error["message"] as? String ?? "Unknown error")))
+                callback(.failure(ClientError.serverError(error["message"] as? String ?? "알 수 없는 오류")))
             } else {
                 callback(.success(object))
             }
@@ -165,9 +165,9 @@ final class CodexAppServerClient: @unchecked Sendable {
         case codexNotFound, serverStopped, serverError(String)
         var errorDescription: String? {
             switch self {
-            case .codexNotFound: "Couldn't find the Codex CLI. Set CODEX_PATH."
-            case .serverStopped: "Codex app-server exited."
-            case .serverError(let message): "Codex error: \(message)"
+            case .codexNotFound: "Codex CLI를 찾지 못했습니다. CODEX_PATH를 설정해 주세요."
+            case .serverStopped: "Codex app-server가 종료되었습니다."
+            case .serverError(let message): "Codex 오류: \(message)"
             }
         }
     }

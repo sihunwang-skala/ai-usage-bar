@@ -19,11 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 하나만 쓰는 사람도 있어서, 안 쓰는 쪽까지 "100/100"으로 표시되는 걸 막기 위함이다.
     private func runFirstLaunchPicker() {
         let alert = NSAlert()
-        alert.messageText = "Which service(s) do you want to track?"
-        alert.informativeText = "Choose what to show in the menu bar. You can change this anytime from the menu."
-        alert.addButton(withTitle: "Both")
-        alert.addButton(withTitle: "Claude Only")
-        alert.addButton(withTitle: "Codex Only")
+        alert.messageText = "어떤 서비스를 추적할까요?"
+        alert.informativeText = "메뉴 막대에 표시할 서비스를 고르세요. 나중에 메뉴에서 언제든 바꿀 수 있습니다."
+        alert.addButton(withTitle: "둘 다")
+        alert.addButton(withTitle: "Claude만")
+        alert.addButton(withTitle: "Codex만")
         NSApp.activate(ignoringOtherApps: true)
         switch alert.runModal() {
         case .alertFirstButtonReturn:

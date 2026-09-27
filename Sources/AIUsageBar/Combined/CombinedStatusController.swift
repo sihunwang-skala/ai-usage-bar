@@ -190,11 +190,11 @@ final class CombinedStatusController {
         paragraph.minimumLineHeight = 11
         let result = NSMutableAttributedString()
         result.append(NSAttributedString(string: top, attributes: [
-            .font: ServiceFont.number, .foregroundColor: NSColor.systemOrange, .paragraphStyle: paragraph
+            .font: ServiceFont.number, .foregroundColor: AppearancePreferences.fiveHourColor, .paragraphStyle: paragraph
         ]))
         result.append(NSAttributedString(string: "\n", attributes: [.font: ServiceFont.number, .paragraphStyle: paragraph]))
         result.append(NSAttributedString(string: bottom, attributes: [
-            .font: ServiceFont.number, .foregroundColor: NSColor.systemTeal, .paragraphStyle: paragraph
+            .font: ServiceFont.number, .foregroundColor: AppearancePreferences.weeklyColor, .paragraphStyle: paragraph
         ]))
         return result
     }
@@ -236,6 +236,8 @@ final class CombinedStatusController {
         intervalItem.submenu = buildRefreshIntervalMenu()
         let servicesItem = NSMenuItem(title: "서비스 선택", action: nil, keyEquivalent: "")
         servicesItem.submenu = buildServicesMenu()
+        let colorsItem = NSMenuItem(title: "색상 설정", action: nil, keyEquivalent: "")
+        colorsItem.submenu = buildColorMenu()
         let quit = NSMenuItem(title: "종료", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
@@ -248,8 +250,56 @@ final class CombinedStatusController {
         menu.addItem(refreshItem)
         menu.addItem(intervalItem)
         menu.addItem(servicesItem)
+        menu.addItem(colorsItem)
         menu.addItem(quit)
         detailMenu = menu
+    }
+
+    private enum ColorTarget { case fiveHour, weekly }
+    private var editingColorTarget: ColorTarget?
+
+    private func buildColorMenu() -> NSMenu {
+        let submenu = NSMenu()
+        let fiveItem = NSMenuItem(title: "5시간 숫자 색상…", action: #selector(pickFiveHourColor), keyEquivalent: "")
+        fiveItem.target = self
+        let weekItem = NSMenuItem(title: "주간 숫자 색상…", action: #selector(pickWeeklyColor), keyEquivalent: "")
+        weekItem.target = self
+        let resetItem = NSMenuItem(title: "기본 색상으로 초기화", action: #selector(resetColors), keyEquivalent: "")
+        resetItem.target = self
+        submenu.addItem(fiveItem)
+        submenu.addItem(weekItem)
+        submenu.addItem(.separator())
+        submenu.addItem(resetItem)
+        return submenu
+    }
+
+    @objc private func pickFiveHourColor() { showColorPanel(for: .fiveHour, initial: AppearancePreferences.fiveHourColor) }
+    @objc private func pickWeeklyColor() { showColorPanel(for: .weekly, initial: AppearancePreferences.weeklyColor) }
+
+    private func showColorPanel(for target: ColorTarget, initial: NSColor) {
+        editingColorTarget = target
+        let panel = NSColorPanel.shared
+        panel.setTarget(self)
+        panel.setAction(#selector(colorPanelChanged(_:)))
+        panel.showsAlpha = false
+        panel.color = initial
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func colorPanelChanged(_ sender: NSColorPanel) {
+        switch editingColorTarget {
+        case .fiveHour: AppearancePreferences.fiveHourColor = sender.color
+        case .weekly: AppearancePreferences.weeklyColor = sender.color
+        case nil: return
+        }
+        relayoutAndRender()
+    }
+
+    @objc private func resetColors() {
+        AppearancePreferences.fiveHourColor = .systemOrange
+        AppearancePreferences.weeklyColor = .systemTeal
+        relayoutAndRender()
     }
 
     private func buildServicesMenu() -> NSMenu {

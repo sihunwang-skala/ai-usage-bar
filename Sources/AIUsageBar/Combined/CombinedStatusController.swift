@@ -46,7 +46,7 @@ final class CombinedStatusController {
     // 새로고침 주기: UserDefaults에 저장해 재실행 후에도 유지한다.
     private static let refreshIntervalKey = "refreshIntervalSeconds"
     private static let refreshIntervalOptions: [(label: String, seconds: TimeInterval)] = [
-        ("30초마다", 30), ("1분마다", 60), ("5분마다", 300)
+        ("Every 30s", 30), ("Every 1 min", 60), ("Every 5 min", 300)
     ]
     private var refreshInterval: TimeInterval {
         get {
@@ -219,26 +219,26 @@ final class CombinedStatusController {
         let menu = NSMenu()
 
         claudeHeaderItem = Self.headerItem(title: "Claude")
-        claudeFiveHourItem = NSMenuItem(title: "5시간: 불러오는 중…", action: #selector(openClaudeUsagePage), keyEquivalent: "")
-        claudeWeeklyItem = NSMenuItem(title: "주간: 불러오는 중…", action: #selector(openClaudeUsagePage), keyEquivalent: "")
+        claudeFiveHourItem = NSMenuItem(title: "5H: Loading…", action: #selector(openClaudeUsagePage), keyEquivalent: "")
+        claudeWeeklyItem = NSMenuItem(title: "1W: Loading…", action: #selector(openClaudeUsagePage), keyEquivalent: "")
         claudeStatusItem = NSMenuItem(title: "", action: #selector(openClaudeUsagePage), keyEquivalent: "")
         [claudeFiveHourItem!, claudeWeeklyItem!, claudeStatusItem!].forEach { $0.target = self }
 
         codexHeaderItem = Self.headerItem(title: "Codex")
-        codexFiveHourItem = NSMenuItem(title: "5시간: 불러오는 중…", action: #selector(openCodexUsagePage), keyEquivalent: "")
-        codexWeeklyItem = NSMenuItem(title: "주간: 불러오는 중…", action: #selector(openCodexUsagePage), keyEquivalent: "")
+        codexFiveHourItem = NSMenuItem(title: "5H: Loading…", action: #selector(openCodexUsagePage), keyEquivalent: "")
+        codexWeeklyItem = NSMenuItem(title: "1W: Loading…", action: #selector(openCodexUsagePage), keyEquivalent: "")
         codexStatusItem = NSMenuItem(title: "", action: #selector(openCodexUsagePage), keyEquivalent: "")
         [codexFiveHourItem!, codexWeeklyItem!, codexStatusItem!].forEach { $0.target = self }
 
-        refreshItem = NSMenuItem(title: "지금 새로고침", action: #selector(refreshClicked), keyEquivalent: "r")
+        refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshClicked), keyEquivalent: "r")
         refreshItem.target = self
-        let intervalItem = NSMenuItem(title: "새로고침 주기", action: nil, keyEquivalent: "")
+        let intervalItem = NSMenuItem(title: "Refresh Interval", action: nil, keyEquivalent: "")
         intervalItem.submenu = buildRefreshIntervalMenu()
-        let servicesItem = NSMenuItem(title: "서비스 선택", action: nil, keyEquivalent: "")
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
         servicesItem.submenu = buildServicesMenu()
-        let colorsItem = NSMenuItem(title: "색상 설정", action: nil, keyEquivalent: "")
+        let colorsItem = NSMenuItem(title: "Colors", action: nil, keyEquivalent: "")
         colorsItem.submenu = buildColorMenu()
-        let quit = NSMenuItem(title: "종료", action: #selector(quitClicked), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
         menu.addItem(claudeHeaderItem)
@@ -260,11 +260,11 @@ final class CombinedStatusController {
 
     private func buildColorMenu() -> NSMenu {
         let submenu = NSMenu()
-        let fiveItem = NSMenuItem(title: "5시간 숫자 색상…", action: #selector(pickFiveHourColor), keyEquivalent: "")
+        let fiveItem = NSMenuItem(title: "5H Number Color…", action: #selector(pickFiveHourColor), keyEquivalent: "")
         fiveItem.target = self
-        let weekItem = NSMenuItem(title: "주간 숫자 색상…", action: #selector(pickWeeklyColor), keyEquivalent: "")
+        let weekItem = NSMenuItem(title: "1W Number Color…", action: #selector(pickWeeklyColor), keyEquivalent: "")
         weekItem.target = self
-        let resetItem = NSMenuItem(title: "기본 색상으로 초기화", action: #selector(resetColors), keyEquivalent: "")
+        let resetItem = NSMenuItem(title: "Reset to Default Colors", action: #selector(resetColors), keyEquivalent: "")
         resetItem.target = self
         submenu.addItem(fiveItem)
         submenu.addItem(weekItem)
@@ -304,10 +304,10 @@ final class CombinedStatusController {
 
     private func buildServicesMenu() -> NSMenu {
         let submenu = NSMenu()
-        let claudeToggle = NSMenuItem(title: "Claude 사용", action: #selector(toggleClaudeService), keyEquivalent: "")
+        let claudeToggle = NSMenuItem(title: "Use Claude", action: #selector(toggleClaudeService), keyEquivalent: "")
         claudeToggle.target = self
         claudeToggle.state = ServicePreferences.claudeEnabled ? .on : .off
-        let codexToggle = NSMenuItem(title: "Codex 사용", action: #selector(toggleCodexService), keyEquivalent: "")
+        let codexToggle = NSMenuItem(title: "Use Codex", action: #selector(toggleCodexService), keyEquivalent: "")
         codexToggle.target = self
         codexToggle.state = ServicePreferences.codexEnabled ? .on : .off
         submenu.addItem(claudeToggle)
@@ -422,19 +422,19 @@ final class CombinedStatusController {
         let five = snapshot.fiveHour
         let week = snapshot.weekly
         claudeFiveHourItem.attributedTitle = nil
-        claudeFiveHourItem.title = line(label: "5시간 남음", resetsAt: five?.resetsAt, remaining: five.map(claudeRemaining))
+        claudeFiveHourItem.title = line(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(claudeRemaining))
         claudeWeeklyItem.attributedTitle = nil
-        claudeWeeklyItem.title = line(label: "주간 남음", resetsAt: week?.resetsAt, remaining: week.map(claudeRemaining))
-        let plan = claudeAccountInfo.plan.map { $0.uppercased() } ?? "요금제 알 수 없음"
-        let model = claudeAccountInfo.model ?? "모델 알 수 없음"
-        claudeStatusItem.title = "최근 확인: \(Self.timeFormatter.string(from: Date())) · \(plan) · \(model)"
+        claudeWeeklyItem.title = line(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(claudeRemaining))
+        let plan = claudeAccountInfo.plan.map { $0.uppercased() } ?? "Unknown plan"
+        let model = claudeAccountInfo.model ?? "Unknown model"
+        claudeStatusItem.title = "Checked \(Self.timeFormatter.string(from: Date())) · \(plan) · \(model)"
 
         claudeFiveText = five.map { "\(claudeRemaining($0))" } ?? "—"
         claudeWeekText = week.map { "\(claudeRemaining($0))" } ?? "—"
         relayoutAndRender()
 
-        if let five { notifier.check(serviceName: "Claude", windowLabel: "5시간", usedPercent: 100 - claudeRemaining(five)) }
-        if let week { notifier.check(serviceName: "Claude", windowLabel: "주간", usedPercent: 100 - claudeRemaining(week)) }
+        if let five { notifier.check(serviceName: "Claude", windowLabel: "5H", usedPercent: 100 - claudeRemaining(five)) }
+        if let week { notifier.check(serviceName: "Claude", windowLabel: "1W", usedPercent: 100 - claudeRemaining(week)) }
     }
 
     private func renderClaudeError(_ error: Error) {
@@ -442,10 +442,10 @@ final class CombinedStatusController {
         claudeWeekText = "—"
         relayoutAndRender()
         claudeFiveHourItem.attributedTitle = nil
-        claudeFiveHourItem.title = "사용량을 불러오지 못했습니다"
+        claudeFiveHourItem.title = "Failed to load usage"
         claudeWeeklyItem.attributedTitle = nil
         claudeWeeklyItem.title = error.localizedDescription
-        claudeStatusItem.title = "Claude Code를 한 번 이상 사용한 뒤 다시 시도해 주세요"
+        claudeStatusItem.title = "Use Claude Code at least once, then try again"
     }
 
     private func claudeRemaining(_ window: ClaudeRateLimitWindow) -> Int {
@@ -486,20 +486,20 @@ final class CombinedStatusController {
         let five = snapshot.fiveHour
         let week = snapshot.weekly
         codexFiveHourItem.attributedTitle = nil
-        codexFiveHourItem.title = line(label: "5시간 남음", resetsAt: five?.resetsAt, remaining: five.map(codexRemaining))
+        codexFiveHourItem.title = line(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(codexRemaining))
         codexWeeklyItem.attributedTitle = nil
-        codexWeeklyItem.title = line(label: "주간 남음", resetsAt: week?.resetsAt, remaining: week.map(codexRemaining))
-        let plan = snapshot.planType.map { $0.uppercased() } ?? "계획 알 수 없음"
-        let model = snapshot.model ?? "모델 알 수 없음"
-        let effort = snapshot.reasoningEffort ?? "강도 알 수 없음"
-        codexStatusItem.title = "최근 확인: \(Self.timeFormatter.string(from: Date())) · \(plan) · \(model) · \(effort)"
+        codexWeeklyItem.title = line(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(codexRemaining))
+        let plan = snapshot.planType.map { $0.uppercased() } ?? "Unknown plan"
+        let model = snapshot.model ?? "Unknown model"
+        let effort = snapshot.reasoningEffort ?? "Unknown effort"
+        codexStatusItem.title = "Checked \(Self.timeFormatter.string(from: Date())) · \(plan) · \(model) · \(effort)"
 
         codexFiveText = five.map { "\(codexRemaining($0))" } ?? "—"
         codexWeekText = week.map { "\(codexRemaining($0))" } ?? "—"
         relayoutAndRender()
 
-        if let five { notifier.check(serviceName: "Codex", windowLabel: "5시간", usedPercent: 100 - codexRemaining(five)) }
-        if let week { notifier.check(serviceName: "Codex", windowLabel: "주간", usedPercent: 100 - codexRemaining(week)) }
+        if let five { notifier.check(serviceName: "Codex", windowLabel: "5H", usedPercent: 100 - codexRemaining(five)) }
+        if let week { notifier.check(serviceName: "Codex", windowLabel: "1W", usedPercent: 100 - codexRemaining(week)) }
     }
 
     private func renderCodexError(_ error: Error) {
@@ -507,10 +507,10 @@ final class CombinedStatusController {
         codexWeekText = "—"
         relayoutAndRender()
         codexFiveHourItem.attributedTitle = nil
-        codexFiveHourItem.title = "사용량을 불러오지 못했습니다"
+        codexFiveHourItem.title = "Failed to load usage"
         codexWeeklyItem.attributedTitle = nil
         codexWeeklyItem.title = error.localizedDescription
-        codexStatusItem.title = "Codex CLI 로그인 상태를 확인해 주세요"
+        codexStatusItem.title = "Check your Codex CLI login status"
     }
 
     private func codexRemaining(_ window: CodexRateLimitWindow) -> Int {
@@ -520,9 +520,9 @@ final class CombinedStatusController {
     // MARK: - Shared rendering helpers
 
     private func line(label: String, resetsAt: Date?, remaining: Int?) -> String {
-        guard let remaining else { return "\(label): 데이터 없음" }
-        let reset = resetsAt.map { Self.resetFormatter.string(from: $0) } ?? "알 수 없음"
-        return "\(label): \(remaining)% · 갱신 \(reset)"
+        guard let remaining else { return "\(label): no data" }
+        let reset = resetsAt.map { Self.resetFormatter.string(from: $0) } ?? "unknown"
+        return "\(label)  \(remaining)% left · resets \(reset)"
     }
 
     private static func claudeIcon() -> NSImage {
@@ -546,14 +546,14 @@ final class CombinedStatusController {
 
     private static let resetFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "M월 d일 (E) HH:mm"
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.dateFormat = "MMM d, HH:mm"
         return formatter
     }()
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.locale = Locale(identifier: "en_US")
         formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()

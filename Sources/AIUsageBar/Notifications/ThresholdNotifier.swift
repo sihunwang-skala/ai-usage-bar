@@ -6,10 +6,10 @@ import UserNotifications
 /// UNUserNotificationCenter를 쓰므로 앱이 정식 .app 번들(Info.plist의 CFBundleIdentifier 포함)로
 /// 실행되어야 한다 — raw 커맨드라인 실행파일로 직접 돌리면 알림이 등록되지 않는다.
 final class ThresholdNotifier {
-    private let thresholds = [25, 75, 80, 90]
     private var lastNotifiedThreshold: [String: Int] = [:]
 
     func check(serviceName: String, windowLabel: String, usedPercent: Int) {
+        let thresholds = NotificationPreferences.thresholds
         let key = "\(serviceName)-\(windowLabel)"
         guard let crossed = thresholds.last(where: { usedPercent >= $0 }) else {
             lastNotifiedThreshold.removeValue(forKey: key)
@@ -19,7 +19,7 @@ final class ThresholdNotifier {
         lastNotifiedThreshold[key] = crossed
         notify(
             title: "\(serviceName) \(windowLabel) 사용량 경고",
-            message: "사용률이 \(usedPercent)%입니다 (임계치 \(crossed)% 이상)"
+            message: "사용률이 \(usedPercent)%입니다"
         )
     }
 

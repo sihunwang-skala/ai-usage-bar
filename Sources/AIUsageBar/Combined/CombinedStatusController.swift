@@ -238,6 +238,8 @@ final class CombinedStatusController {
         servicesItem.submenu = buildServicesMenu()
         let colorsItem = NSMenuItem(title: "색상 설정", action: nil, keyEquivalent: "")
         colorsItem.submenu = buildColorMenu()
+        let notificationsItem = NSMenuItem(title: "알림 설정", action: nil, keyEquivalent: "")
+        notificationsItem.submenu = buildNotificationMenu()
         let quit = NSMenuItem(title: "종료", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
@@ -251,8 +253,60 @@ final class CombinedStatusController {
         menu.addItem(intervalItem)
         menu.addItem(servicesItem)
         menu.addItem(colorsItem)
+        menu.addItem(notificationsItem)
         menu.addItem(quit)
         detailMenu = menu
+    }
+
+    private static let notificationPresets: [(label: String, thresholds: [Int])] = [
+        ("10%마다", [10, 20, 30, 40, 50, 60, 70, 80, 90, 95]),
+        ("20%마다", [20, 40, 60, 80, 90, 95]),
+        ("25%마다", [25, 50, 75, 90]),
+        ("알림 끄기", [])
+    ]
+
+    private func buildNotificationMenu() -> NSMenu {
+        let submenu = NSMenu()
+        let current = NotificationPreferences.thresholds
+        for preset in Self.notificationPresets {
+            let item = NSMenuItem(title: preset.label, action: #selector(notificationPresetSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = preset.thresholds
+            item.state = current == preset.thresholds ? .on : .off
+            submenu.addItem(item)
+        }
+        submenu.addItem(.separator())
+        let customLabel = Self.notificationPresets.contains(where: { $0.thresholds == current })
+            ? "직접 입력…"
+            : "직접 입력… (현재: \(current.map(String.init).joined(separator: ", "))%)"
+        let customItem = NSMenuItem(title: customLabel, action: #selector(customThresholdsClicked), keyEquivalent: "")
+        customItem.target = self
+        submenu.addItem(customItem)
+        return submenu
+    }
+
+    @objc private func notificationPresetSelected(_ sender: NSMenuItem) {
+        guard let thresholds = sender.representedObject as? [Int] else { return }
+        NotificationPreferences.thresholds = thresholds
+    }
+
+    @objc private func customThresholdsClicked() {
+        let alert = NSAlert()
+        alert.messageText = "알림 임계치 직접 입력"
+        alert.informativeText = "사용률(%) 기준 임계치를 쉼표로 구분해서 입력하세요. 예: 20, 40, 60, 80, 90, 95"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = NotificationPreferences.thresholds.map(String.init).joined(separator: ", ")
+        alert.accessoryView = field
+        alert.addButton(withTitle: "저장")
+        alert.addButton(withTitle: "취소")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let parsed = field.stringValue
+            .split(separator: ",")
+            .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            .filter { (0...100).contains($0) }
+        guard !parsed.isEmpty else { return }
+        NotificationPreferences.thresholds = Array(Set(parsed))
     }
 
     private enum ColorTarget { case fiveHour, weekly }

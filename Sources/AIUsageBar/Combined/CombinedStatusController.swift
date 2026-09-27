@@ -12,8 +12,11 @@ final class CombinedStatusController {
     private var codexButton: NSButton!
     private var claudeButton: NSButton!
 
-    private var claudeVisible = true
-    private var codexVisible = true
+    // 로그인 여부(실제 상태)와 최종 표시 여부(로그인 && 사용자가 켰는지)를 분리해서 관리한다.
+    private var claudeLoggedIn = true
+    private var codexLoggedIn = true
+    private var claudeVisible = ServicePreferences.claudeEnabled
+    private var codexVisible = ServicePreferences.codexEnabled
     private var claudeFiveText = "—"
     private var claudeWeekText = "—"
     private var codexFiveText = "—"
@@ -200,6 +203,16 @@ final class CombinedStatusController {
         updateTitle()
     }
 
+    /// 로그인 여부와 사용자 설정(ServicePreferences)을 합쳐 최종 표시 여부를 다시 계산한다.
+    private func updateVisibility() {
+        let newClaudeVisible = ServicePreferences.claudeEnabled && claudeLoggedIn
+        let newCodexVisible = ServicePreferences.codexEnabled && codexLoggedIn
+        guard newClaudeVisible != claudeVisible || newCodexVisible != codexVisible else { return }
+        claudeVisible = newClaudeVisible
+        codexVisible = newCodexVisible
+        relayoutAndRender()
+    }
+
     // MARK: - Menu
 
     private func buildDetailMenu() {
@@ -221,6 +234,8 @@ final class CombinedStatusController {
         refreshItem.target = self
         let intervalItem = NSMenuItem(title: "새로고침 주기", action: nil, keyEquivalent: "")
         intervalItem.submenu = buildRefreshIntervalMenu()
+        let servicesItem = NSMenuItem(title: "서비스 선택", action: nil, keyEquivalent: "")
+        servicesItem.submenu = buildServicesMenu()
         let quit = NSMenuItem(title: "종료", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
@@ -232,8 +247,36 @@ final class CombinedStatusController {
         menu.addItem(.separator())
         menu.addItem(refreshItem)
         menu.addItem(intervalItem)
+        menu.addItem(servicesItem)
         menu.addItem(quit)
         detailMenu = menu
+    }
+
+    private func buildServicesMenu() -> NSMenu {
+        let submenu = NSMenu()
+        let claudeToggle = NSMenuItem(title: "Claude 사용", action: #selector(toggleClaudeService), keyEquivalent: "")
+        claudeToggle.target = self
+        claudeToggle.state = ServicePreferences.claudeEnabled ? .on : .off
+        let codexToggle = NSMenuItem(title: "Codex 사용", action: #selector(toggleCodexService), keyEquivalent: "")
+        codexToggle.target = self
+        codexToggle.state = ServicePreferences.codexEnabled ? .on : .off
+        submenu.addItem(claudeToggle)
+        submenu.addItem(codexToggle)
+        return submenu
+    }
+
+    @objc private func toggleClaudeService(_ sender: NSMenuItem) {
+        let enabled = !ServicePreferences.claudeEnabled
+        ServicePreferences.claudeEnabled = enabled
+        sender.state = enabled ? .on : .off
+        updateVisibility()
+    }
+
+    @objc private func toggleCodexService(_ sender: NSMenuItem) {
+        let enabled = !ServicePreferences.codexEnabled
+        ServicePreferences.codexEnabled = enabled
+        sender.state = enabled ? .on : .off
+        updateVisibility()
     }
 
     private func buildRefreshIntervalMenu() -> NSMenu {
@@ -318,9 +361,9 @@ final class CombinedStatusController {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let loggedIn = ClaudeAccountInfoReader.read().loggedIn
             Task { @MainActor in
-                guard let self, self.claudeVisible != loggedIn else { return }
-                self.claudeVisible = loggedIn
-                self.relayoutAndRender()
+                guard let self else { return }
+                self.claudeLoggedIn = loggedIn
+                self.updateVisibility()
             }
         }
     }
@@ -382,9 +425,9 @@ final class CombinedStatusController {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let loggedIn = CodexAccountInfoReader.isLoggedIn()
             Task { @MainActor in
-                guard let self, self.codexVisible != loggedIn else { return }
-                self.codexVisible = loggedIn
-                self.relayoutAndRender()
+                guard let self else { return }
+                self.codexLoggedIn = loggedIn
+                self.updateVisibility()
             }
         }
     }

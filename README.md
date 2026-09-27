@@ -9,11 +9,13 @@ A macOS menu bar app that shows your **Claude** and **Codex (ChatGPT)** subscrip
 ```
 
 Each service gets its own icon + two stacked numbers (top: 5-hour remaining %, bottom: weekly
-remaining %). A service block disappears automatically when you're logged out of that service.
+remaining %). Only use one of the two services? Pick just that one on first launch (or change it
+anytime from the menu) — no need to see a useless "100/100" block for a service you don't use.
 
 ## Features
 
 - Live 5-hour / weekly remaining percentage for both Claude and Codex
+- Pick which service(s) to track on first launch, change anytime via the menu
 - Configurable refresh interval (30s / 1min / 5min), picked from the menu
 - Hover for exact reset date/time; click the menu for plan, model, and reasoning effort
 - Native macOS notifications when usage crosses 25/75/80/90%
@@ -63,13 +65,15 @@ change may require an app update.
 ## Install
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/sihunwang-skala/ai-usage-bar.git
 cd ai-usage-bar
 ./install.sh
 ```
 
 This builds a release binary, packages it as `AI Usage Bar.app`, copies it to `/Applications`,
-and registers a LaunchAgent so it starts automatically at login.
+and registers a LaunchAgent so it starts automatically at login. See
+[INSTALL.md](INSTALL.md) for a step-by-step walkthrough, including how to get past the
+"unidentified developer" Gatekeeper warning on first launch.
 
 To uninstall:
 

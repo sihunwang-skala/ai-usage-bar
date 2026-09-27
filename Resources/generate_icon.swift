@@ -19,24 +19,30 @@ func drawIcon(size: CGFloat) -> NSImage {
     ])
     gradient?.draw(in: bg, angle: -90)
 
-    // 두 개의 세로 "게이지" 막대: Codex(주황)와 Claude(청록)를 상징
-    let barWidth = size * 0.16
-    let gap = size * 0.10
-    let baseY = size * 0.18
-    let maxHeight = size * 0.64
-    let totalWidth = barWidth * 2 + gap
-    let startX = (size - totalWidth) / 2
+    // 두 개의 원형 게이지 링: 바깥쪽 주황(5H), 안쪽 청록(1W) — 사용률 계기판 느낌
+    let orange = NSColor(calibratedRed: 1.0, green: 0.58, blue: 0.20, alpha: 1)
+    let teal = NSColor(calibratedRed: 0.30, green: 0.78, blue: 0.75, alpha: 1)
+    let center = NSPoint(x: size / 2, y: size / 2)
 
-    func bar(x: CGFloat, heightFraction: CGFloat, color: NSColor) {
-        let h = maxHeight * heightFraction
-        let barRect = NSRect(x: x, y: baseY, width: barWidth, height: h)
-        let path = NSBezierPath(roundedRect: barRect, xRadius: barWidth * 0.3, yRadius: barWidth * 0.3)
-        color.setFill()
-        path.fill()
+    func ring(radius: CGFloat, lineWidth: CGFloat, color: NSColor, fraction: CGFloat) {
+        let track = NSBezierPath()
+        track.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+        track.lineWidth = lineWidth
+        color.withAlphaComponent(0.18).setStroke()
+        track.stroke()
+
+        let arc = NSBezierPath()
+        let start: CGFloat = 90
+        let end = start - 360 * fraction
+        arc.appendArc(withCenter: center, radius: radius, startAngle: end, endAngle: start)
+        arc.lineWidth = lineWidth
+        arc.lineCapStyle = .round
+        color.setStroke()
+        arc.stroke()
     }
 
-    bar(x: startX, heightFraction: 0.55, color: NSColor(calibratedRed: 1.0, green: 0.58, blue: 0.20, alpha: 1))
-    bar(x: startX + barWidth + gap, heightFraction: 0.85, color: NSColor(calibratedRed: 0.30, green: 0.78, blue: 0.75, alpha: 1))
+    ring(radius: size * 0.34, lineWidth: size * 0.085, color: orange, fraction: 0.68)
+    ring(radius: size * 0.22, lineWidth: size * 0.085, color: teal, fraction: 0.85)
 
     image.unlockFocus()
     return image

@@ -238,8 +238,10 @@ final class CombinedStatusController {
         servicesItem.submenu = buildServicesMenu()
         let colorsItem = NSMenuItem(title: "색상 설정", action: nil, keyEquivalent: "")
         colorsItem.submenu = buildColorMenu()
-        let notificationsItem = NSMenuItem(title: "알림 설정", action: nil, keyEquivalent: "")
+        let notificationsItem = NSMenuItem(title: "알림 임계치", action: nil, keyEquivalent: "")
         notificationsItem.submenu = buildNotificationMenu()
+        let soundItem = NSMenuItem(title: "알림 소리", action: nil, keyEquivalent: "")
+        soundItem.submenu = buildSoundMenu()
         let quit = NSMenuItem(title: "종료", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
@@ -254,6 +256,7 @@ final class CombinedStatusController {
         menu.addItem(servicesItem)
         menu.addItem(colorsItem)
         menu.addItem(notificationsItem)
+        menu.addItem(soundItem)
         menu.addItem(quit)
         detailMenu = menu
     }
@@ -307,6 +310,32 @@ final class CombinedStatusController {
             .filter { (0...100).contains($0) }
         guard !parsed.isEmpty else { return }
         NotificationPreferences.thresholds = Array(Set(parsed))
+    }
+
+    private func buildSoundMenu() -> NSMenu {
+        let submenu = NSMenu()
+        let current = NotificationPreferences.soundName
+        func addOption(_ label: String, _ value: String) {
+            let item = NSMenuItem(title: label, action: #selector(soundOptionSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            item.state = current == value ? .on : .off
+            submenu.addItem(item)
+        }
+        addOption("기본음", NotificationPreferences.defaultSoundName)
+        addOption("무음", NotificationPreferences.noSoundName)
+        submenu.addItem(.separator())
+        for name in NotificationPreferences.systemSoundNames { addOption(name, name) }
+        return submenu
+    }
+
+    @objc private func soundOptionSelected(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String else { return }
+        NotificationPreferences.soundName = value
+        sender.menu?.items.forEach { $0.state = ($0 === sender) ? .on : .off }
+        if value != NotificationPreferences.noSoundName && value != NotificationPreferences.defaultSoundName {
+            NSSound(named: value)?.play()
+        }
     }
 
     private enum ColorTarget { case fiveHour, weekly }
@@ -487,8 +516,8 @@ final class CombinedStatusController {
         claudeWeekText = week.map { "\(claudeRemaining($0))" } ?? "—"
         relayoutAndRender()
 
-        if let five { notifier.check(serviceName: "Claude", windowLabel: "5H", usedPercent: 100 - claudeRemaining(five)) }
-        if let week { notifier.check(serviceName: "Claude", windowLabel: "1W", usedPercent: 100 - claudeRemaining(week)) }
+        if let five { notifier.check(serviceName: "Claude", windowLabel: "5시간", usedPercent: 100 - claudeRemaining(five)) }
+        if let week { notifier.check(serviceName: "Claude", windowLabel: "주간", usedPercent: 100 - claudeRemaining(week)) }
     }
 
     private func renderClaudeError(_ error: Error) {
@@ -552,8 +581,8 @@ final class CombinedStatusController {
         codexWeekText = week.map { "\(codexRemaining($0))" } ?? "—"
         relayoutAndRender()
 
-        if let five { notifier.check(serviceName: "Codex", windowLabel: "5H", usedPercent: 100 - codexRemaining(five)) }
-        if let week { notifier.check(serviceName: "Codex", windowLabel: "1W", usedPercent: 100 - codexRemaining(week)) }
+        if let five { notifier.check(serviceName: "Codex", windowLabel: "5시간", usedPercent: 100 - codexRemaining(five)) }
+        if let week { notifier.check(serviceName: "Codex", windowLabel: "주간", usedPercent: 100 - codexRemaining(week)) }
     }
 
     private func renderCodexError(_ error: Error) {

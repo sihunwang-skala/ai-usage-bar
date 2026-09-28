@@ -18,8 +18,8 @@ final class ThresholdNotifier {
         if let previous = lastNotifiedThreshold[key], previous >= crossed { return }
         lastNotifiedThreshold[key] = crossed
         notify(
-            title: "\(serviceName) \(windowLabel) 사용량 경고",
-            message: "사용률이 \(usedPercent)%입니다"
+            title: "\(serviceName) 사용량 알림",
+            message: "\(windowLabel) 사용량이 \(usedPercent)%에 도달했어요"
         )
     }
 
@@ -27,8 +27,16 @@ final class ThresholdNotifier {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = message
-        content.sound = .default
+        content.sound = Self.resolveSound(named: NotificationPreferences.soundName)
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    static func resolveSound(named name: String) -> UNNotificationSound? {
+        switch name {
+        case NotificationPreferences.defaultSoundName: return .default
+        case NotificationPreferences.noSoundName: return nil
+        default: return UNNotificationSound(named: UNNotificationSoundName("\(name).aiff"))
+        }
     }
 }

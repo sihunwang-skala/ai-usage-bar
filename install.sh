@@ -16,6 +16,9 @@ echo "==> /Applications에 설치"
 rm -rf "$DEST"
 cp -R "dist/AIUsageBar.app" "$DEST"
 
+echo "==> 격리 속성 제거 (macOS '확인되지 않은 개발자' 경고 방지)"
+xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+
 echo "==> 로그 디렉터리 준비"
 mkdir -p "$LOG_DIR"
 
@@ -51,7 +54,13 @@ PLIST_EOF
 
 uid=$(id -u)
 launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$uid" "$PLIST"
+sleep 0.5
+# 방금 bootout한 직후라 launchd가 아직 정리 중이면 bootstrap이 가끔
+# "Input/output error"로 실패한다 — 한 번 더 시도하면 대부분 해결된다.
+if ! launchctl bootstrap "gui/$uid" "$PLIST" 2>/dev/null; then
+    sleep 1.5
+    launchctl bootstrap "gui/$uid" "$PLIST"
+fi
 launchctl kickstart -k "gui/$uid/$LABEL"
 
 echo "==> 설치 완료: $DEST"

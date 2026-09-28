@@ -82,4 +82,4 @@ launchctl kickstart -k "gui/$uid/$LABEL"
 
 echo "==> 설치 완료: $DEST"
 echo "    로그: $LOG_DIR"
-echo "    끄려면: ./uninstall.sh"
+echo "    삭제하려면: ./uninstall.sh"

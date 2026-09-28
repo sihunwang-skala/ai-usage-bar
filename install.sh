@@ -9,6 +9,23 @@ LABEL="com.aiusagebar.app"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/AIUsageBar"
 
+echo "==> 필요 도구 확인"
+if ! xcode-select -p &>/dev/null || ! command -v swift &>/dev/null; then
+    echo ""
+    echo "  Xcode Command Line Tools가 설치돼 있지 않아요."
+    echo "  아래 명령을 먼저 실행하고, 설치 창이 끝나면 이 스크립트를 다시 실행해주세요."
+    echo ""
+    echo "    xcode-select --install"
+    echo ""
+    exit 1
+fi
+if ! command -v claude &>/dev/null && ! command -v codex &>/dev/null; then
+    echo ""
+    echo "  ⚠︎  Claude Code CLI, Codex CLI 둘 다 안 보여요. 이 앱은 둘 중 하나가"
+    echo "     설치·로그인 돼 있어야 사용량을 보여줄 수 있어요 (설치는 계속 진행합니다)."
+    echo ""
+fi
+
 echo "==> 빌드"
 ./build-app.sh
 

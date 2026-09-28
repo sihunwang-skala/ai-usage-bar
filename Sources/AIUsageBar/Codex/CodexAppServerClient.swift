@@ -153,12 +153,7 @@ final class CodexAppServerClient: @unchecked Sendable {
     }
 
     private static func findCodex() -> String {
-        let candidates = [
-            ProcessInfo.processInfo.environment["CODEX_PATH"],
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex"
-        ].compactMap { $0 }
-        return candidates.first(where: FileManager.default.isExecutableFile(atPath:)) ?? ""
+        CLILocator.find("codex", envOverrideKey: "CODEX_PATH") ?? ""
     }
 
     enum ClientError: LocalizedError {

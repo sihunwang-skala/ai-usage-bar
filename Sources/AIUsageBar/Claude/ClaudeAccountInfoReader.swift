@@ -47,11 +47,6 @@ enum ClaudeAccountInfoReader {
     }
 
     private static func findClaude() -> String? {
-        let candidates = [
-            ProcessInfo.processInfo.environment["CLAUDE_PATH"],
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude"
-        ].compactMap { $0 }
-        return candidates.first(where: FileManager.default.isExecutableFile(atPath:))
+        CLILocator.find("claude", envOverrideKey: "CLAUDE_PATH")
     }
 }

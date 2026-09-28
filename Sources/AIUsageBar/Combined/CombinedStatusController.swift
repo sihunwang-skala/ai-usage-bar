@@ -11,6 +11,10 @@ final class CombinedStatusController {
     private var containerView: NSView!
     private var codexButton: NSButton!
     private var claudeButton: NSButton!
+    /// Claude/Codex 둘 다 로그인 안 됐거나 둘 다 꺼져있어서 아이콘이 하나도 없을 때 보여주는
+    /// 대체 버튼. 이게 없으면 메뉴 막대 항목이 폭 1pt짜리 실질적으로 안 보이는 상태가 되어,
+    /// "설치했는데 아무것도 안 뜬다"는 문의로 이어진다.
+    private var fallbackButton: NSButton!
 
     // 로그인 여부(실제 상태)와 최종 표시 여부(로그인 && 사용자가 켰는지)를 분리해서 관리한다.
     private var claudeLoggedIn = true
@@ -118,6 +122,15 @@ final class CombinedStatusController {
         claudeButton.action = #selector(claudeButtonClicked)
         containerView.addSubview(codexButton)
         containerView.addSubview(claudeButton)
+
+        fallbackButton = Self.makeServiceButton()
+        fallbackButton.title = "⚠︎ 로그인 필요"
+        fallbackButton.imagePosition = .noImage
+        fallbackButton.font = ServiceFont.number
+        fallbackButton.isHidden = true
+        fallbackButton.target = self
+        fallbackButton.action = #selector(fallbackButtonClicked)
+        containerView.addSubview(fallbackButton)
     }
 
     private static func makeServiceButton() -> NSButton {
@@ -178,8 +191,36 @@ final class CombinedStatusController {
             x += button.frame.width
             if index < visible.count - 1 { x += 6 }
         }
+        fallbackButton.isHidden = !visible.isEmpty
+        if visible.isEmpty {
+            fallbackButton.sizeToFit()
+            fallbackButton.frame.origin = NSPoint(x: 0, y: 0)
+            x = fallbackButton.frame.width
+        }
         containerView.frame.size = NSSize(width: max(x, 1), height: containerView.frame.height)
         statusItem.length = containerView.frame.width
+    }
+
+    @objc private func fallbackButtonClicked() {
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            detailMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: fallbackButton)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "사용량을 표시할 수 없어요"
+        alert.informativeText = """
+        Claude Code CLI 또는 Codex CLI 중 최소 하나가 로그인돼 있어야 사용량을 보여줄 수 있어요.
+
+        터미널에서 아래 명령으로 로그인 상태를 확인해보세요.
+        claude auth status
+        codex login status
+
+        로그인한 뒤에는 "지금 새로고침"을 누르거나 잠시 기다리면 자동으로 반영됩니다. (우클릭하면 서비스 선택·새로고침 메뉴로 바로 갈 수 있어요.)
+        """
+        alert.addButton(withTitle: "확인")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     private static func stackedTitle(top: String, bottom: String) -> NSAttributedString {

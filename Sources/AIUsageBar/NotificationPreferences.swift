@@ -26,4 +26,19 @@ enum NotificationPreferences {
         get { UserDefaults.standard.string(forKey: soundKey) ?? defaultSoundName }
         set { UserDefaults.standard.set(newValue, forKey: soundKey) }
     }
+
+    /// 작업 완료·확인 필요 알림을 누가 보낼지. Claude Code 훅(~/.claude/scripts)이 이 값을 읽는다.
+    /// - "usagebar"(기본): 훅 알림을 보낸다. 눌러서 그 세션이 있는 데스크톱으로 이동한다. Claude 자체 알림은 끄는 걸 권한다.
+    /// - "claude": Claude Desktop 자체 알림만 쓴다. 훅 알림은 보내지 않고 AI Usage Bar는 사용량 임계치 알림만 보낸다.
+    private static let taskSourceKey = "taskNotificationSource"
+    static let taskSourceUsageBar = "usagebar"
+    static let taskSourceClaude = "claude"
+
+    /// 한 번도 고른 적이 없으면 nil. 이때만 시작할 때 한 번 물어본다.
+    static var taskSourceIfChosen: String? { UserDefaults.standard.string(forKey: taskSourceKey) }
+
+    static var taskSource: String {
+        get { UserDefaults.standard.string(forKey: taskSourceKey) ?? taskSourceUsageBar }
+        set { UserDefaults.standard.set(newValue, forKey: taskSourceKey) }
+    }
 }

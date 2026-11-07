@@ -52,6 +52,6 @@ enum CodexUsageParser {
 
     enum ParseError: LocalizedError {
         case missingRateLimits
-        var errorDescription: String? { "Codex 응답에 사용량 정보가 없습니다." }
+        var errorDescription: String? { tr("The Codex response has no usage information.", "Codex 응답에 사용량 정보가 없어요.") }
     }
 }

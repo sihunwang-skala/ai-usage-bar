@@ -4,7 +4,7 @@ import AppKit
 /// 블록을 나란히 붙여서 보여주는 컨트롤러. 두 서비스를 별도 NSStatusItem으로 나누면 시스템이
 /// 항목 사이에 고정 여백을 넣어 메뉴 막대 공간을 많이 차지하므로, 진짜 NSButton 두 개를 하나의
 /// 컨테이너에 붙여 쓴다 — image+attributedTitle 조합은 예전 개별 앱 버전에서 이미 검증된
-/// 렌더링 경로라 커스텀 텍스트필드보다 훨씬 안정적이다. 로그인되지 않은 서비스는 완전히 빠진다.
+/// 렌더링 경로라 커스텀 텍스트필드보다 훨씬 안정적이다.
 @MainActor
 final class CombinedStatusController {
     private var statusItem: NSStatusItem!
@@ -31,6 +31,7 @@ final class CombinedStatusController {
     private var claudeFiveHourItem: NSMenuItem!
     private var claudeWeeklyItem: NSMenuItem!
     private var claudeStatusItem: NSMenuItem!
+    private var claudeConnectItem: NSMenuItem!
     private var codexHeaderItem: NSMenuItem!
     private var codexFiveHourItem: NSMenuItem!
     private var codexWeeklyItem: NSMenuItem!
@@ -45,13 +46,26 @@ final class CombinedStatusController {
     private var claudeAccountTimer: Timer?
     private var codexTimer: Timer?
     private var codexAccountTimer: Timer?
-    private var directoryWatcher: DispatchSourceFileSystemObject?
+    private var directoryWatchers: [DispatchSourceFileSystemObject] = []
+    private var isClaudeAccessibilityRefreshing = false
+    private var lastClaudeAccessibilityRefresh: Date?
+    private var claudeAccessibilityError: String?
+
+    // Anthropic 사용량 API(계정 전체, 웹/Desktop/터미널 공통). 호출은 최소 60초 간격으로 제한한다.
+    private let claudeOAuthReader = ClaudeOAuthUsageReader()
+    private var claudeAPISnapshot: ClaudeUsageSnapshot?
+    private var claudeAPIError: String?
+    private var isClaudeAPIRefreshing = false
+    private var nextClaudeAPIAttempt = Date.distantPast
+    private static let claudeAPIMinInterval: TimeInterval = 120
+    private static let claudeAPIRetryInterval: TimeInterval = 5 * 60
+    private static let claudeAPIRateLimitedInterval: TimeInterval = 15 * 60
 
     // 새로고침 주기: UserDefaults에 저장해 재실행 후에도 유지한다.
     private static let refreshIntervalKey = "refreshIntervalSeconds"
-    private static let refreshIntervalOptions: [(label: String, seconds: TimeInterval)] = [
-        ("30초마다", 30), ("1분마다", 60), ("5분마다", 300)
-    ]
+    private static var refreshIntervalOptions: [(label: String, seconds: TimeInterval)] {
+        [(tr("Every 30 seconds", "30초마다"), 30), (tr("Every minute", "1분마다"), 60), (tr("Every 5 minutes", "5분마다"), 300)]
+    }
     private var refreshInterval: TimeInterval {
         get {
             let stored = UserDefaults.standard.double(forKey: Self.refreshIntervalKey)
@@ -60,10 +74,8 @@ final class CombinedStatusController {
         set { UserDefaults.standard.set(newValue, forKey: Self.refreshIntervalKey) }
     }
 
-    private let claudeWebURL = URL(string: "https://claude.ai/projects")!
-    private let claudeUsageURL = URL(string: "https://claude.ai/settings/usage")!
-    private let chatGPTURL = URL(string: "https://chatgpt.com/projects")!
-    private let codexUsageURL = URL(string: "https://chatgpt.com/settings/usage?tab=overview")!
+    private let claudeUsageURL = WebDashboardOpener.claudeUsageURL
+    private let codexUsageURL = WebDashboardOpener.codexUsageURL
 
     func start() {
         configureStatusItem()
@@ -124,7 +136,7 @@ final class CombinedStatusController {
         containerView.addSubview(claudeButton)
 
         fallbackButton = Self.makeServiceButton()
-        fallbackButton.title = "⚠︎ 로그인 필요"
+        fallbackButton.title = tr("⚠︎ Sign-in needed", "⚠︎ 로그인 필요")
         fallbackButton.imagePosition = .noImage
         fallbackButton.font = ServiceFont.number
         fallbackButton.isHidden = true
@@ -145,18 +157,23 @@ final class CombinedStatusController {
     /// 버튼 로컬 좌표 기준 아이콘 클릭 판정 폭. 원래 개별 앱 버전이 쓰던 24pt 임계치와 같은 계열.
     private static let iconClickThreshold: CGFloat = 20
 
-    @objc private func codexButtonClicked() { handleClick(on: codexButton, webURL: chatGPTURL) }
-    @objc private func claudeButtonClicked() { handleClick(on: claudeButton, webURL: claudeWebURL) }
+    @objc private func codexButtonClicked() { handleClick(on: codexButton) { GPTIconTarget.current.perform() } }
+    @objc private func claudeButtonClicked() { handleClick(on: claudeButton) { ClaudeIconTarget.current.perform() } }
 
-    private func handleClick(on button: NSButton, webURL: URL) {
-        guard let event = NSApp.currentEvent else { return }
+    /// 아이콘을 누르면 그 앱의 사용량 화면이 아니라, 마지막으로 작업하던 창(프로젝트)으로 간다.
+    private func handleClick(on button: NSButton, iconAction: () -> Void) {
+        guard let event = NSApp.currentEvent else {
+            print("[click-debug] handleClick: NSApp.currentEvent is nil")
+            return
+        }
+        print("[click-debug] handleClick: event.type=\(event.type.rawValue)")
         if event.type == .rightMouseUp {
             detailMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
             return
         }
         let local = button.convert(event.locationInWindow, from: nil)
         if local.x <= Self.iconClickThreshold {
-            NSWorkspace.shared.open(webURL)
+            iconAction()
         } else {
             detailMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
         }
@@ -202,23 +219,33 @@ final class CombinedStatusController {
     }
 
     @objc private func fallbackButtonClicked() {
-        guard let event = NSApp.currentEvent else { return }
+        guard let event = NSApp.currentEvent else {
+            print("[click-debug] fallbackButtonClicked: NSApp.currentEvent is nil")
+            return
+        }
+        print("[click-debug] fallbackButtonClicked: event.type=\(event.type.rawValue)")
         if event.type == .rightMouseUp {
             detailMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: fallbackButton)
             return
         }
         let alert = NSAlert()
-        alert.messageText = "사용량을 표시할 수 없어요"
-        alert.informativeText = """
-        Claude Code CLI 또는 Codex CLI 중 최소 하나가 로그인돼 있어야 사용량을 보여줄 수 있어요.
+        alert.messageText = tr("Can't show usage yet", "사용량을 표시할 수 없어요")
+        alert.informativeText = tr("""
+        At least one of Claude Desktop or the Codex CLI needs to be ready before usage can be shown.
 
-        터미널에서 아래 명령으로 로그인 상태를 확인해보세요.
-        claude auth status
-        codex login status
+        For Claude, open the usage screen once in the Desktop app.
+        For Codex, check your sign-in with `codex login status` in Terminal.
+
+        After signing in, choose "Refresh now" or wait a moment and it will update automatically. (Right-click for the services and refresh menu.)
+        """, """
+        Claude Desktop 또는 Codex CLI 중 최소 하나가 준비돼 있어야 사용량을 보여줄 수 있어요.
+
+        Claude는 Desktop 앱에서 사용량 화면을 한 번 열어 주세요.
+        Codex는 터미널에서 codex login status로 로그인 상태를 확인해 주세요.
 
         로그인한 뒤에는 "지금 새로고침"을 누르거나 잠시 기다리면 자동으로 반영됩니다. (우클릭하면 서비스 선택·새로고침 메뉴로 바로 갈 수 있어요.)
-        """
-        alert.addButton(withTitle: "확인")
+        """)
+        alert.addButton(withTitle: tr("OK", "확인"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
@@ -246,7 +273,8 @@ final class CombinedStatusController {
 
     /// 로그인 여부와 사용자 설정(ServicePreferences)을 합쳐 최종 표시 여부를 다시 계산한다.
     private func updateVisibility() {
-        let newClaudeVisible = ServicePreferences.claudeEnabled && claudeLoggedIn
+        // Claude는 연결 전에도 블록을 보여줘야 사용자가 메뉴에서 계정을 연결할 수 있다.
+        let newClaudeVisible = ServicePreferences.claudeEnabled
         let newCodexVisible = ServicePreferences.codexEnabled && codexLoggedIn
         guard newClaudeVisible != claudeVisible || newCodexVisible != codexVisible else { return }
         claudeVisible = newClaudeVisible
@@ -260,30 +288,40 @@ final class CombinedStatusController {
         let menu = NSMenu()
 
         claudeHeaderItem = Self.headerItem(title: "Claude")
-        claudeFiveHourItem = NSMenuItem(title: "5H: 불러오는 중…", action: #selector(openClaudeUsagePage), keyEquivalent: "")
-        claudeWeeklyItem = NSMenuItem(title: "1W: 불러오는 중…", action: #selector(openClaudeUsagePage), keyEquivalent: "")
+        claudeFiveHourItem = NSMenuItem(title: tr("5H: loading…", "5H: 불러오는 중…"), action: #selector(openClaudeUsagePage), keyEquivalent: "")
+        claudeWeeklyItem = NSMenuItem(title: tr("1W: loading…", "1W: 불러오는 중…"), action: #selector(openClaudeUsagePage), keyEquivalent: "")
         claudeStatusItem = NSMenuItem(title: "", action: #selector(openClaudeUsagePage), keyEquivalent: "")
         [claudeFiveHourItem!, claudeWeeklyItem!, claudeStatusItem!].forEach { $0.target = self }
+        claudeConnectItem = NSMenuItem(title: tr("Read latest Claude Desktop usage…", "Claude Desktop 최신 사용량 읽기…"), action: #selector(refreshClaudeFromDesktop), keyEquivalent: "")
+        claudeConnectItem.target = self
+        updateClaudeConnectMenuItem()
 
         codexHeaderItem = Self.headerItem(title: "Codex")
-        codexFiveHourItem = NSMenuItem(title: "5H: 불러오는 중…", action: #selector(openCodexUsagePage), keyEquivalent: "")
-        codexWeeklyItem = NSMenuItem(title: "1W: 불러오는 중…", action: #selector(openCodexUsagePage), keyEquivalent: "")
+        codexFiveHourItem = NSMenuItem(title: tr("5H: loading…", "5H: 불러오는 중…"), action: #selector(openCodexUsagePage), keyEquivalent: "")
+        codexWeeklyItem = NSMenuItem(title: tr("1W: loading…", "1W: 불러오는 중…"), action: #selector(openCodexUsagePage), keyEquivalent: "")
         codexStatusItem = NSMenuItem(title: "", action: #selector(openCodexUsagePage), keyEquivalent: "")
         [codexFiveHourItem!, codexWeeklyItem!, codexStatusItem!].forEach { $0.target = self }
 
-        refreshItem = NSMenuItem(title: "지금 새로고침", action: #selector(refreshClicked), keyEquivalent: "r")
+        refreshItem = NSMenuItem(title: tr("Refresh now", "지금 새로고침"), action: #selector(refreshClicked), keyEquivalent: "r")
         refreshItem.target = self
-        let intervalItem = NSMenuItem(title: "새로고침 주기", action: nil, keyEquivalent: "")
+        let intervalItem = NSMenuItem(title: tr("Refresh interval", "새로고침 주기"), action: nil, keyEquivalent: "")
         intervalItem.submenu = buildRefreshIntervalMenu()
-        let servicesItem = NSMenuItem(title: "서비스 선택", action: nil, keyEquivalent: "")
+        let servicesItem = NSMenuItem(title: tr("Services", "서비스 선택"), action: nil, keyEquivalent: "")
         servicesItem.submenu = buildServicesMenu()
-        let colorsItem = NSMenuItem(title: "색상 설정", action: nil, keyEquivalent: "")
+        let colorsItem = NSMenuItem(title: tr("Colors", "색상 설정"), action: nil, keyEquivalent: "")
         colorsItem.submenu = buildColorMenu()
-        let notificationsItem = NSMenuItem(title: "알림 임계치", action: nil, keyEquivalent: "")
+        let notificationsItem = NSMenuItem(title: tr("Alert thresholds", "알림 임계치"), action: nil, keyEquivalent: "")
         notificationsItem.submenu = buildNotificationMenu()
-        let soundItem = NSMenuItem(title: "알림 소리", action: nil, keyEquivalent: "")
+        let testNotificationItem = NSMenuItem(title: tr("Test notification", "알림 테스트"), action: #selector(testNotification), keyEquivalent: "")
+        testNotificationItem.target = self
+        let soundItem = NSMenuItem(title: tr("Alert sound", "알림 소리"), action: nil, keyEquivalent: "")
         soundItem.submenu = buildSoundMenu()
-        let quit = NSMenuItem(title: "종료", action: #selector(quitClicked), keyEquivalent: "q")
+        let tokenConsentItem = NSMenuItem(title: tr("Live Claude usage (uses your Claude Code sign-in)", "Claude 실시간 조회 (로그인 정보 사용)"), action: #selector(toggleClaudeTokenConsent(_:)), keyEquivalent: "")
+        tokenConsentItem.target = self
+        tokenConsentItem.state = PrivacyPreferences.claudeTokenConsent == true ? .on : .off
+        let taskSourceItem = NSMenuItem(title: tr("Task-done notifications", "작업 완료 알림"), action: nil, keyEquivalent: "")
+        taskSourceItem.submenu = buildTaskSourceMenu()
+        let quit = NSMenuItem(title: tr("Quit", "종료"), action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
         menu.addItem(claudeHeaderItem)
@@ -297,17 +335,28 @@ final class CombinedStatusController {
         menu.addItem(servicesItem)
         menu.addItem(colorsItem)
         menu.addItem(notificationsItem)
+        menu.addItem(tokenConsentItem)
+        menu.addItem(taskSourceItem)
+        let iconActionItem = NSMenuItem(title: tr("Icon click action", "아이콘 클릭 동작"), action: nil, keyEquivalent: "")
+        iconActionItem.submenu = buildIconActionMenu()
+        menu.addItem(iconActionItem)
+        let languageItem = NSMenuItem(title: "언어 / Language", action: nil, keyEquivalent: "")
+        languageItem.submenu = buildLanguageMenu()
+        menu.addItem(languageItem)
+        menu.addItem(testNotificationItem)
         menu.addItem(soundItem)
         menu.addItem(quit)
         detailMenu = menu
     }
 
-    private static let notificationPresets: [(label: String, thresholds: [Int])] = [
-        ("10%마다", [10, 20, 30, 40, 50, 60, 70, 80, 90, 95]),
-        ("20%마다", [20, 40, 60, 80, 90, 95]),
-        ("25%마다", [25, 50, 75, 90]),
-        ("알림 끄기", [])
-    ]
+    private static var notificationPresets: [(label: String, thresholds: [Int])] {
+        [
+            (tr("Every 10%", "10%마다"), [10, 20, 30, 40, 50, 60, 70, 80, 90, 95]),
+            (tr("Every 20%", "20%마다"), [20, 40, 60, 80, 90, 95]),
+            (tr("Every 25%", "25%마다"), [25, 50, 75, 90]),
+            (tr("Alerts off", "알림 끄기"), [])
+        ]
+    }
 
     private func buildNotificationMenu() -> NSMenu {
         let submenu = NSMenu()
@@ -321,8 +370,8 @@ final class CombinedStatusController {
         }
         submenu.addItem(.separator())
         let customLabel = Self.notificationPresets.contains(where: { $0.thresholds == current })
-            ? "직접 입력…"
-            : "직접 입력… (현재: \(current.map(String.init).joined(separator: ", "))%)"
+            ? tr("Custom…", "직접 입력…")
+            : tr("Custom… (now: \(current.map(String.init).joined(separator: ", "))%)", "직접 입력… (현재: \(current.map(String.init).joined(separator: ", "))%)")
         let customItem = NSMenuItem(title: customLabel, action: #selector(customThresholdsClicked), keyEquivalent: "")
         customItem.target = self
         submenu.addItem(customItem)
@@ -336,13 +385,13 @@ final class CombinedStatusController {
 
     @objc private func customThresholdsClicked() {
         let alert = NSAlert()
-        alert.messageText = "알림 임계치 직접 입력"
-        alert.informativeText = "사용률(%) 기준 임계치를 쉼표로 구분해서 입력하세요. 예: 20, 40, 60, 80, 90, 95"
+        alert.messageText = tr("Custom alert thresholds", "알림 임계치 직접 입력")
+        alert.informativeText = tr("Enter usage thresholds (%) separated by commas, e.g. 20, 40, 60, 80, 90, 95", "사용률(%) 기준 임계치를 쉼표로 구분해서 입력하세요. 예: 20, 40, 60, 80, 90, 95")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         field.stringValue = NotificationPreferences.thresholds.map(String.init).joined(separator: ", ")
         alert.accessoryView = field
-        alert.addButton(withTitle: "저장")
-        alert.addButton(withTitle: "취소")
+        alert.addButton(withTitle: tr("Save", "저장"))
+        alert.addButton(withTitle: tr("Cancel", "취소"))
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let parsed = field.stringValue
@@ -351,6 +400,108 @@ final class CombinedStatusController {
             .filter { (0...100).contains($0) }
         guard !parsed.isEmpty else { return }
         NotificationPreferences.thresholds = Array(Set(parsed))
+    }
+
+    @objc private func toggleClaudeTokenConsent(_ sender: NSMenuItem) {
+        if PrivacyPreferences.claudeTokenConsent == true {
+            PrivacyPreferences.claudeTokenConsent = false
+            sender.state = .off
+            claudeAPISnapshot = nil
+            refreshClaude()
+        } else {
+            let allowed = PrivacyPreferences.askClaudeTokenConsent()
+            sender.state = allowed ? .on : .off
+            if allowed { nextClaudeAPIAttempt = .distantPast; refreshClaude() }
+        }
+    }
+
+    private func buildIconActionMenu() -> NSMenu {
+        let submenu = NSMenu()
+        func header(_ title: String) {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            submenu.addItem(item)
+        }
+        header(tr("When you click the GPT icon", "GPT 아이콘을 누르면"))
+        for target in GPTIconTarget.allCases {
+            let item = NSMenuItem(title: target.title, action: #selector(iconTargetSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = "gpt:" + target.rawValue
+            item.state = GPTIconTarget.current == target ? .on : .off
+            submenu.addItem(item)
+        }
+        submenu.addItem(.separator())
+        header(tr("When you click the Claude icon", "Claude 아이콘을 누르면"))
+        for target in ClaudeIconTarget.allCases {
+            let item = NSMenuItem(title: target.title, action: #selector(iconTargetSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = "claude:" + target.rawValue
+            item.state = ClaudeIconTarget.current == target ? .on : .off
+            submenu.addItem(item)
+        }
+        return submenu
+    }
+
+    @objc private func iconTargetSelected(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String else { return }
+        let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        let prefix = parts[0] + ":"
+        if parts[0] == "gpt", let target = GPTIconTarget(rawValue: parts[1]) { GPTIconTarget.current = target }
+        if parts[0] == "claude", let target = ClaudeIconTarget(rawValue: parts[1]) { ClaudeIconTarget.current = target }
+        sender.menu?.items.forEach {
+            if let other = $0.representedObject as? String, other.hasPrefix(prefix) { $0.state = ($0 === sender) ? .on : .off }
+        }
+    }
+
+    private func buildLanguageMenu() -> NSMenu {
+        let submenu = NSMenu()
+        let current = Localization.preference
+        let options: [(String, AppLanguage)] = [
+            ("자동 / Auto (System language)", .system), ("English", .english), ("한국어", .korean)
+        ]
+        for (label, language) in options {
+            let item = NSMenuItem(title: label, action: #selector(languageSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = language.rawValue
+            item.state = current == language ? .on : .off
+            submenu.addItem(item)
+        }
+        return submenu
+    }
+
+    /// 언어를 바꾸면 메뉴와 상태 문구를 새 언어로 다시 만든다.
+    @objc private func languageSelected(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let language = AppLanguage(rawValue: raw) else { return }
+        Localization.preference = language
+        buildDetailMenu()
+        refreshClaude()
+        refreshCodex()
+    }
+
+    private func buildTaskSourceMenu() -> NSMenu {
+        let submenu = NSMenu()
+        let current = NotificationPreferences.taskSource
+        func addOption(_ label: String, _ value: String) {
+            let item = NSMenuItem(title: label, action: #selector(taskSourceSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            item.state = current == value ? .on : .off
+            submenu.addItem(item)
+        }
+        addOption(tr("AI Usage Bar notifications (click to jump to that desktop)", "AI Usage Bar 알림 (눌러서 그 데스크톱으로 이동)"), NotificationPreferences.taskSourceUsageBar)
+        addOption(tr("Claude's own notifications (AI Usage Bar sends usage alerts only)", "Claude 자체 알림 (AI Usage Bar는 사용량 임계치만)"), NotificationPreferences.taskSourceClaude)
+        submenu.addItem(.separator())
+        let note = NSMenuItem(title: tr("If you pick the first, turn off System Settings → Notifications → Claude", "첫 번째를 쓰면 시스템 설정 → 알림 → Claude는 끄세요"), action: nil, keyEquivalent: "")
+        note.isEnabled = false
+        submenu.addItem(note)
+        return submenu
+    }
+
+    @objc private func taskSourceSelected(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String else { return }
+        NotificationPreferences.taskSource = value
+        sender.menu?.items.forEach { if $0.representedObject != nil { $0.state = ($0 === sender) ? .on : .off } }
     }
 
     private func buildSoundMenu() -> NSMenu {
@@ -363,8 +514,8 @@ final class CombinedStatusController {
             item.state = current == value ? .on : .off
             submenu.addItem(item)
         }
-        addOption("기본음", NotificationPreferences.defaultSoundName)
-        addOption("무음", NotificationPreferences.noSoundName)
+        addOption(tr("Default", "기본음"), NotificationPreferences.defaultSoundName)
+        addOption(tr("Silent", "무음"), NotificationPreferences.noSoundName)
         submenu.addItem(.separator())
         for name in NotificationPreferences.systemSoundNames { addOption(name, name) }
         return submenu
@@ -384,11 +535,11 @@ final class CombinedStatusController {
 
     private func buildColorMenu() -> NSMenu {
         let submenu = NSMenu()
-        let fiveItem = NSMenuItem(title: "5H 숫자 색상…", action: #selector(pickFiveHourColor), keyEquivalent: "")
+        let fiveItem = NSMenuItem(title: tr("5H number color…", "5H 숫자 색상…"), action: #selector(pickFiveHourColor), keyEquivalent: "")
         fiveItem.target = self
-        let weekItem = NSMenuItem(title: "1W 숫자 색상…", action: #selector(pickWeeklyColor), keyEquivalent: "")
+        let weekItem = NSMenuItem(title: tr("1W number color…", "1W 숫자 색상…"), action: #selector(pickWeeklyColor), keyEquivalent: "")
         weekItem.target = self
-        let resetItem = NSMenuItem(title: "기본 색상으로 초기화", action: #selector(resetColors), keyEquivalent: "")
+        let resetItem = NSMenuItem(title: tr("Reset to default colors", "기본 색상으로 초기화"), action: #selector(resetColors), keyEquivalent: "")
         resetItem.target = self
         submenu.addItem(fiveItem)
         submenu.addItem(weekItem)
@@ -428,10 +579,10 @@ final class CombinedStatusController {
 
     private func buildServicesMenu() -> NSMenu {
         let submenu = NSMenu()
-        let claudeToggle = NSMenuItem(title: "Claude 사용", action: #selector(toggleClaudeService), keyEquivalent: "")
+        let claudeToggle = NSMenuItem(title: tr("Use Claude", "Claude 사용"), action: #selector(toggleClaudeService), keyEquivalent: "")
         claudeToggle.target = self
         claudeToggle.state = ServicePreferences.claudeEnabled ? .on : .off
-        let codexToggle = NSMenuItem(title: "Codex 사용", action: #selector(toggleCodexService), keyEquivalent: "")
+        let codexToggle = NSMenuItem(title: tr("Use Codex", "Codex 사용"), action: #selector(toggleCodexService), keyEquivalent: "")
         codexToggle.target = self
         codexToggle.state = ServicePreferences.codexEnabled ? .on : .off
         submenu.addItem(claudeToggle)
@@ -470,6 +621,7 @@ final class CombinedStatusController {
         refreshInterval = seconds
         sender.menu?.items.forEach { $0.state = ($0 == sender) ? .on : .off }
         scheduleUsageTimers()
+        refreshClaude()
     }
 
     private static func headerItem(title: String) -> NSMenuItem {
@@ -481,9 +633,19 @@ final class CombinedStatusController {
         return item
     }
 
-    @objc private func openClaudeUsagePage() { NSWorkspace.shared.open(claudeUsageURL) }
-    @objc private func openCodexUsagePage() { NSWorkspace.shared.open(codexUsageURL) }
+    @objc private func openClaudeUsagePage() { WebDashboardOpener.open(claudeUsageURL) }
+    @objc private func openCodexUsagePage() { WebDashboardOpener.open(codexUsageURL) }
+    @objc private func refreshClaudeFromDesktop() {
+        guard ClaudeDesktopAccessibilityReader.isTrusted else {
+            ClaudeDesktopAccessibilityReader.requestPermission()
+            updateClaudeConnectMenuItem()
+            return
+        }
+        lastClaudeAccessibilityRefresh = nil
+        refreshClaudeAccessibility(force: true)
+    }
     @objc private func refreshClicked() {
+        nextClaudeAPIAttempt = .distantPast
         refreshClaude()
         refreshClaudeAccountInfo()
         refreshClaudeLoginState()
@@ -495,7 +657,12 @@ final class CombinedStatusController {
     // MARK: - Claude data
 
     private func watchClaudeUsageFile() {
-        let path = ClaudeUsageMonitorReader.watchDirectory.path
+        watchClaudeDirectory(ClaudeDesktopUsageReader.watchDirectory)
+        watchClaudeDirectory(ClaudeUsageMonitorReader.watchDirectory)
+    }
+
+    private func watchClaudeDirectory(_ directory: URL) {
+        let path = directory.path
         guard FileManager.default.fileExists(atPath: path) else { return }
         let descriptor = open(path, O_EVTONLY)
         guard descriptor >= 0 else { return }
@@ -509,15 +676,104 @@ final class CombinedStatusController {
         }
         source.setCancelHandler { close(descriptor) }
         source.resume()
-        directoryWatcher = source
+        directoryWatchers.append(source)
     }
 
     private func refreshClaude() {
-        do {
-            let snapshot = try ClaudeUsageMonitorReader.read()
-            renderClaude(snapshot)
-        } catch {
-            renderClaudeError(error)
+        let desktop = try? ClaudeDesktopUsageReader.read()
+        let code = try? ClaudeUsageMonitorReader.read()
+        let candidates: [(snapshot: ClaudeUsageSnapshot, source: String)] = [
+            claudeAPISnapshot.map { ($0, tr("Claude account-wide · live", "Claude 계정 전체 · 실시간")) },
+            desktop.map { ($0, tr("Claude Desktop account-wide", "Claude Desktop 계정 전체")) },
+            code.map { ($0, tr("Claude Code local", "Claude Code 로컬")) }
+        ].compactMap { $0 }
+
+        let newest = candidates.max(by: {
+            ($0.snapshot.updatedAt ?? .distantPast) < ($1.snapshot.updatedAt ?? .distantPast)
+        })
+        if let newest {
+            renderClaude(newest.snapshot, source: newest.source)
+        } else {
+            renderClaudeError(ClaudeDesktopUsageReader.ReadError.fileNotFound)
+        }
+
+        refreshClaudeFromAPI()
+
+        // 화면 읽기(접근성)는 UI를 직접 건드려 비싸므로, 최신값이 없을 때만 보조 수단으로 쓴다.
+        let hasFresh = newest.map { !Self.isStale($0.snapshot) } ?? false
+        if !hasFresh { refreshClaudeAccessibility(force: false) }
+    }
+
+    private static func isStale(_ snapshot: ClaudeUsageSnapshot) -> Bool {
+        snapshot.updatedAt.map { Date().timeIntervalSince($0) > 30 * 60 } ?? true
+    }
+
+    /// 사용량 API 조회. 웹·Desktop·터미널 어디서 썼든 계정 전체 최신값을 가져온다.
+    private func refreshClaudeFromAPI() {
+        // 사용자가 동의한 경우에만 로그인 토큰을 읽는다.
+        guard PrivacyPreferences.claudeTokenConsent == true,
+              ServicePreferences.claudeEnabled, !isClaudeAPIRefreshing,
+              Date() >= nextClaudeAPIAttempt else { return }
+        isClaudeAPIRefreshing = true
+        // 비공식 조회 주소라 자주 부르면 429로 막힌다. 새로고침 주기가 짧아도 최소 간격(2분)은 지킨다.
+        // 그 사이에는 Desktop/Code 로컬 기록과 화면 값이 계속 갱신된다.
+        nextClaudeAPIAttempt = Date().addingTimeInterval(max(refreshInterval - 1, Self.claudeAPIMinInterval))
+        let reader = claudeOAuthReader
+        Task { [weak self] in
+            do {
+                let snapshot = try await reader.fetch()
+                self?.claudeAPIDidSucceed(snapshot)
+            } catch {
+                self?.claudeAPIDidFail(error)
+            }
+        }
+    }
+
+    private func claudeAPIDidSucceed(_ snapshot: ClaudeUsageSnapshot) {
+        isClaudeAPIRefreshing = false
+        claudeAPISnapshot = snapshot
+        claudeAPIError = nil
+        print("[claude-api] ok 5h=\(snapshot.fiveHour?.usedPercent ?? -1) 7d=\(snapshot.weekly?.usedPercent ?? -1)")
+        refreshClaude()
+    }
+
+    private func claudeAPIDidFail(_ error: Error) {
+        isClaudeAPIRefreshing = false
+        claudeAPIError = error.localizedDescription
+        print("[claude-api] fail \(error.localizedDescription)")
+        var wait = Self.claudeAPIRetryInterval
+        if case .rateLimited = error as? ClaudeOAuthUsageReader.ReadError { wait = Self.claudeAPIRateLimitedInterval }
+        nextClaudeAPIAttempt = Date().addingTimeInterval(wait)
+        refreshClaude()
+    }
+
+    private func refreshClaudeAccessibility(force: Bool) {
+        guard ClaudeDesktopAccessibilityReader.isTrusted, !isClaudeAccessibilityRefreshing else {
+            updateClaudeConnectMenuItem()
+            return
+        }
+        if !force,
+           let lastClaudeAccessibilityRefresh,
+           Date().timeIntervalSince(lastClaudeAccessibilityRefresh) < 5 * 60 {
+            return
+        }
+        isClaudeAccessibilityRefreshing = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try ClaudeDesktopAccessibilityReader.read() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.isClaudeAccessibilityRefreshing = false
+                self.lastClaudeAccessibilityRefresh = Date()
+                switch result {
+                case .success(let snapshot):
+                    self.claudeAccessibilityError = nil
+                    self.renderClaude(snapshot, source: tr("Claude Desktop screen (latest)", "Claude Desktop 화면 최신값"))
+                case .failure(let error):
+                    self.claudeAccessibilityError = error.localizedDescription
+                    self.refreshClaude() // 실패 사유를 상태줄에 반영 (화면 읽기는 5분 간격 제한으로 재호출되지 않음)
+                }
+                self.updateClaudeConnectMenuItem()
+            }
         }
     }
 
@@ -533,7 +789,8 @@ final class CombinedStatusController {
 
     private func refreshClaudeLoginState() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let loggedIn = ClaudeAccountInfoReader.read().loggedIn
+            let loggedIn = FileManager.default.fileExists(atPath: ClaudeDesktopUsageReader.fileURL.path)
+                || ClaudeAccountInfoReader.read().loggedIn
             Task { @MainActor in
                 guard let self else { return }
                 self.claudeLoggedIn = loggedIn
@@ -542,34 +799,73 @@ final class CombinedStatusController {
         }
     }
 
-    private func renderClaude(_ snapshot: ClaudeUsageSnapshot) {
+    private func renderClaude(_ snapshot: ClaudeUsageSnapshot, source: String) {
         let five = snapshot.fiveHour
         let week = snapshot.weekly
+        let stale = Self.isStale(snapshot)
         claudeFiveHourItem.attributedTitle = nil
         claudeFiveHourItem.title = line(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(claudeRemaining))
         claudeWeeklyItem.attributedTitle = nil
         claudeWeeklyItem.title = line(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(claudeRemaining))
-        let plan = claudeAccountInfo.plan.map { $0.uppercased() } ?? "요금제 알 수 없음"
-        let model = claudeAccountInfo.model ?? "모델 알 수 없음"
-        claudeStatusItem.title = "최근 확인: \(Self.timeFormatter.string(from: Date())) | \(plan) | \(model)"
+        let plan = claudeAccountInfo.plan.map { $0.uppercased() } ?? tr("plan unknown", "요금제 알 수 없음")
+        let model = claudeAccountInfo.model ?? tr("model unknown", "모델 알 수 없음")
+        let checkedAt = snapshot.updatedAt.map { Self.timeFormatter.string(from: $0) } ?? tr("unknown", "알 수 없음")
+        let staleReason = claudeAPIError ?? claudeAccessibilityError ?? tr("refresh needed from the Claude usage screen", "Claude 사용량 화면에서 갱신 필요")
+        let freshness = stale ? tr("stale · \(staleReason)", "오래된 기록 · \(staleReason)") : tr("up to date", "최신 기록")
+        claudeStatusItem.title = tr("Recorded: \(checkedAt) | \(freshness) | \(source) | \(plan) | \(model)", "기록 시각: \(checkedAt) | \(freshness) | \(source) | \(plan) | \(model)")
+        updateClaudeConnectMenuItem()
 
         claudeFiveText = five.map { "\(claudeRemaining($0))" } ?? "—"
         claudeWeekText = week.map { "\(claudeRemaining($0))" } ?? "—"
+        claudeButton.toolTip = stale
+            ? tr("Claude last record: \(checkedAt)", "Claude 마지막 기록: \(checkedAt)")
+            : tr("Claude account-wide usage", "Claude 계정 전체 사용량")
         relayoutAndRender()
 
-        if let five { notifier.check(serviceName: "Claude", windowLabel: "5시간", usedPercent: 100 - claudeRemaining(five)) }
-        if let week { notifier.check(serviceName: "Claude", windowLabel: "주간", usedPercent: 100 - claudeRemaining(week)) }
+        // 오래된 값으로 임계치 알림을 보내면 현재 사용량으로 오해할 수 있으므로 생략한다.
+        if !stale {
+            if let five { notifier.check(serviceName: "Claude", windowLabel: tr("5-hour", "5시간"), usedPercent: 100 - claudeRemaining(five)) }
+            if let week { notifier.check(serviceName: "Claude", windowLabel: tr("weekly", "주간"), usedPercent: 100 - claudeRemaining(week)) }
+        }
     }
 
     private func renderClaudeError(_ error: Error) {
         claudeFiveText = "—"
         claudeWeekText = "—"
+        claudeButton.toolTip = tr("Couldn't load Claude usage", "Claude 사용량을 불러오지 못했어요")
         relayoutAndRender()
         claudeFiveHourItem.attributedTitle = nil
-        claudeFiveHourItem.title = "사용량을 불러오지 못했습니다"
+        claudeFiveHourItem.title = tr("Couldn't load usage", "사용량을 불러오지 못했어요")
         claudeWeeklyItem.attributedTitle = nil
         claudeWeeklyItem.title = error.localizedDescription
-        claudeStatusItem.title = "Claude Code를 한 번 이상 사용한 뒤 다시 시도해 주세요"
+        claudeStatusItem.title = tr("Open the usage screen in Claude Desktop to load account-wide records", "Claude Desktop의 사용량 화면을 열면 계정 전체 기록을 가져와요")
+        updateClaudeConnectMenuItem()
+    }
+
+    private func updateClaudeConnectMenuItem() {
+        guard claudeConnectItem != nil else { return }
+        claudeConnectItem.title = ClaudeDesktopAccessibilityReader.isTrusted
+            ? tr("Re-read latest Claude Desktop usage", "Claude Desktop 최신 사용량 다시 읽기")
+            : tr("Connect latest Claude Desktop usage…", "Claude Desktop 최신 사용량 연결…")
+    }
+
+    @objc private func testNotification() {
+        notifier.sendTest { [weak self] success in
+            guard !success else { return }
+            Task { @MainActor in
+                let alert = NSAlert()
+                alert.messageText = tr("AI Usage Bar notifications are off", "AI Usage Bar 알림이 꺼져 있어요")
+                alert.informativeText = tr("Turn on Allow Notifications and banners in System Settings → Notifications → AI Usage Bar.", "시스템 설정 → 알림 → AI Usage Bar에서 알림 허용과 배너를 켜 주세요.")
+                alert.addButton(withTitle: tr("Open Notification Settings", "알림 설정 열기"))
+                alert.addButton(withTitle: tr("Close", "닫기"))
+                NSApp.activate(ignoringOtherApps: true)
+                if alert.runModal() == .alertFirstButtonReturn,
+                   let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                    NSWorkspace.shared.open(url)
+                }
+                _ = self
+            }
+        }
     }
 
     private func claudeRemaining(_ window: ClaudeRateLimitWindow) -> Int {
@@ -613,17 +909,17 @@ final class CombinedStatusController {
         codexFiveHourItem.title = line(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(codexRemaining))
         codexWeeklyItem.attributedTitle = nil
         codexWeeklyItem.title = line(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(codexRemaining))
-        let plan = snapshot.planType.map { $0.uppercased() } ?? "계획 알 수 없음"
-        let model = snapshot.model ?? "모델 알 수 없음"
-        let effort = snapshot.reasoningEffort ?? "강도 알 수 없음"
-        codexStatusItem.title = "최근 확인: \(Self.timeFormatter.string(from: Date())) | \(plan) | \(model) | \(effort)"
+        let plan = snapshot.planType.map { $0.uppercased() } ?? tr("plan unknown", "계획 알 수 없음")
+        let model = snapshot.model ?? tr("model unknown", "모델 알 수 없음")
+        let effort = snapshot.reasoningEffort ?? tr("effort unknown", "강도 알 수 없음")
+        codexStatusItem.title = tr("Last checked: \(Self.timeFormatter.string(from: Date())) | \(plan) | \(model) | \(effort)", "최근 확인: \(Self.timeFormatter.string(from: Date())) | \(plan) | \(model) | \(effort)")
 
         codexFiveText = five.map { "\(codexRemaining($0))" } ?? "—"
         codexWeekText = week.map { "\(codexRemaining($0))" } ?? "—"
         relayoutAndRender()
 
-        if let five { notifier.check(serviceName: "Codex", windowLabel: "5시간", usedPercent: 100 - codexRemaining(five)) }
-        if let week { notifier.check(serviceName: "Codex", windowLabel: "주간", usedPercent: 100 - codexRemaining(week)) }
+        if let five { notifier.check(serviceName: "Codex", windowLabel: tr("5-hour", "5시간"), usedPercent: 100 - codexRemaining(five)) }
+        if let week { notifier.check(serviceName: "Codex", windowLabel: tr("weekly", "주간"), usedPercent: 100 - codexRemaining(week)) }
     }
 
     private func renderCodexError(_ error: Error) {
@@ -631,10 +927,10 @@ final class CombinedStatusController {
         codexWeekText = "—"
         relayoutAndRender()
         codexFiveHourItem.attributedTitle = nil
-        codexFiveHourItem.title = "사용량을 불러오지 못했습니다"
+        codexFiveHourItem.title = tr("Couldn't load usage", "사용량을 불러오지 못했어요")
         codexWeeklyItem.attributedTitle = nil
         codexWeeklyItem.title = error.localizedDescription
-        codexStatusItem.title = "Codex CLI 로그인 상태를 확인해 주세요"
+        codexStatusItem.title = tr("Please check your Codex CLI sign-in", "Codex CLI 로그인 상태를 확인해 주세요")
     }
 
     private func codexRemaining(_ window: CodexRateLimitWindow) -> Int {
@@ -644,9 +940,10 @@ final class CombinedStatusController {
     // MARK: - Shared rendering helpers
 
     private func line(label: String, resetsAt: Date?, remaining: Int?) -> String {
-        guard let remaining else { return "\(label): 데이터 없음" }
-        let reset = resetsAt.map { Self.resetFormatter.string(from: $0) } ?? "알 수 없음"
-        return "\(label)  \(remaining)% 남음 | 갱신 \(reset)"
+        guard let remaining else { return tr("\(label): no data", "\(label): 데이터 없음") }
+        guard let resetsAt else { return tr("\(label)  \(remaining)% left", "\(label)  \(remaining)% 남음") }
+        let reset = Self.resetFormatter.string(from: resetsAt)
+        return tr("\(label)  \(remaining)% left | resets \(reset)", "\(label)  \(remaining)% 남음 | 초기화 \(reset)")
     }
 
     private static func claudeIcon() -> NSImage {
@@ -668,19 +965,19 @@ final class CombinedStatusController {
     }
 
 
-    private static let resetFormatter: DateFormatter = {
+    private static var resetFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "M월 d일 (E) HH:mm"
+        formatter.locale = Localization.locale
+        formatter.dateFormat = tr("MMM d (E) HH:mm", "M월 d일 (E) HH:mm")
         return formatter
-    }()
+    }
 
-    private static let timeFormatter: DateFormatter = {
+    private static var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.locale = Localization.locale
         formatter.dateFormat = "HH:mm:ss"
         return formatter
-    }()
+    }
 }
 
 @MainActor

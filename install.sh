@@ -29,6 +29,10 @@ fi
 echo "==> 빌드"
 ./build-app.sh
 
+echo "==> 실행 중인 기존 앱 중지 (업데이트)"
+uid=$(id -u)
+launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
+
 echo "==> /Applications에 설치"
 rm -rf "$DEST"
 cp -R "dist/AIUsageBar.app" "$DEST"
@@ -69,8 +73,6 @@ cat > "$PLIST" <<PLIST_EOF
 </plist>
 PLIST_EOF
 
-uid=$(id -u)
-launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
 sleep 0.5
 # 방금 bootout한 직후라 launchd가 아직 정리 중이면 bootstrap이 가끔
 # "Input/output error"로 실패한다 — 한 번 더 시도하면 대부분 해결된다.

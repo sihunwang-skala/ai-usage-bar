@@ -5,7 +5,7 @@
 ///
 /// UNUserNotificationCenter를 쓰므로 앱이 정식 .app 번들(Info.plist의 CFBundleIdentifier 포함)로
 /// 실행되어야 한다 — raw 커맨드라인 실행파일로 직접 돌리면 알림이 등록되지 않는다.
-final class ThresholdNotifier: @unchecked Sendable {
+final class ThresholdNotifier: @unchecked Sendable, UsageNotifying {
     private var lastNotifiedThreshold: [String: Int] = [:]
 
     func check(serviceName: String, windowLabel: String, usedPercent: Int) {
@@ -24,7 +24,31 @@ final class ThresholdNotifier: @unchecked Sendable {
         )
     }
 
-    private func notify(title: String, message: String, serviceName: String? = nil) {
+    private var lastPreResetKey: [String: Date] = [:]
+
+    /// 5시간 창 리셋이 가까운데 잔량이 충분하면 리셋당 한 번 알린다.
+    /// 주간 잔량이 기준 아래면(5시간 창이 남아도 못 쓰므로) 알리지 않고, 방해 금지 시간에도 보내지 않는다.
+    func checkPreReset(serviceName: String, resetsAt: Date?, fiveHourRemaining: Int, weeklyRemaining: Int?) {
+        guard NotificationPreferences.preResetEnabled, let resetsAt else { return }
+        let now = Date()
+        let lead = TimeInterval(NotificationPreferences.preResetLeadMinutes * 60)
+        guard resetsAt > now, resetsAt.timeIntervalSince(now) <= lead else { return }
+        let minimum = NotificationPreferences.preResetMinRemaining
+        guard fiveHourRemaining >= minimum, (weeklyRemaining ?? 100) >= minimum else { return }
+        guard !NotificationPreferences.isQuietNow(now) else { return }
+        // 같은 리셋(시각이 몇 초 흔들려도 같은 것)이면 한 번만.
+        if let previous = lastPreResetKey[serviceName], abs(previous.timeIntervalSince(resetsAt)) < 600 { return }
+        lastPreResetKey[serviceName] = resetsAt
+        let minutes = max(1, Int(resetsAt.timeIntervalSince(now) / 60))
+        notify(
+            title: tr("\(serviceName) usage resets soon", "\(serviceName) 사용량이 곧 리셋돼요"),
+            message: tr("5-hour window resets in about \(minutes) min with \(fiveHourRemaining)% left. Using it now makes the most of it.",
+                        "5시간 창이 약 \(minutes)분 뒤 리셋되고 \(fiveHourRemaining)%가 남아 있어요. 지금 쓰면 알뜰해요.") + CoachPreferences.tasksSuffix,
+            serviceName: serviceName
+        )
+    }
+
+    func notify(title: String, message: String, serviceName: String? = nil) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = message

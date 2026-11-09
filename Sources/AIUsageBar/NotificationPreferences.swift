@@ -41,4 +41,41 @@ enum NotificationPreferences {
         get { UserDefaults.standard.string(forKey: taskSourceKey) ?? taskSourceUsageBar }
         set { UserDefaults.standard.set(newValue, forKey: taskSourceKey) }
     }
+
+    // MARK: 리셋 전 알림
+    // 5시간 창이 곧 리셋되는데 잔량이 많이 남았으면 "지금 쓰면 이득"이라고 한 번 알려 준다.
+    private static let preResetEnabledKey = "preResetEnabled"
+    private static let preResetLeadKey = "preResetLeadMinutes"
+    private static let preResetMinKey = "preResetMinRemaining"
+
+    static var preResetEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: preResetEnabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: preResetEnabledKey) }
+    }
+    /// 리셋 몇 분 전에 알릴지(기본 60).
+    static var preResetLeadMinutes: Int {
+        get { UserDefaults.standard.object(forKey: preResetLeadKey) as? Int ?? 60 }
+        set { UserDefaults.standard.set(newValue, forKey: preResetLeadKey) }
+    }
+    /// 이 값(%) 이상 남았을 때만 알린다(기본 30).
+    static var preResetMinRemaining: Int {
+        get { UserDefaults.standard.object(forKey: preResetMinKey) as? Int ?? 30 }
+        set { UserDefaults.standard.set(newValue, forKey: preResetMinKey) }
+    }
+    /// 방해 금지 시간대 목록(시 단위, 여러 개 가능). 비어 있으면 꺼짐.
+    static var quietRanges: [(start: Int, end: Int)] {
+        get {
+            let raw = UserDefaults.standard.array(forKey: quietRangesKey) as? [[Int]] ?? []
+            return raw.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
+        }
+        set { UserDefaults.standard.set(newValue.map { [$0.start, $0.end] }, forKey: quietRangesKey) }
+    }
+    private static let quietRangesKey = "quietRanges"
+
+    static func isQuietNow(_ date: Date = Date()) -> Bool {
+        let hour = Calendar.current.component(.hour, from: date)
+        return quietRanges.contains { r in
+            r.start == r.end ? false : (r.start < r.end ? (hour >= r.start && hour < r.end) : (hour >= r.start || hour < r.end))
+        }
+    }
 }

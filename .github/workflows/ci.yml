@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build (debug)
+        run: swift build
+      - name: Unit tests
+        run: swift test
+      - name: Build app bundle (ad-hoc signed)
+        run: ./build-app.sh
+      - name: Lint Info.plist
+        run: plutil -lint Resources/Info.plist
+      - name: Shell syntax check
+        run: |
+          for f in install.sh uninstall.sh build-app.sh setup-signing.sh run.sh scripts/test.sh; do
+            zsh -n "$f"
+          done

@@ -97,6 +97,10 @@ enum ClaudeUsageMonitorReader {
         guard let data = FileManager.default.contents(atPath: fileURL.path) else {
             throw ReadError.fileNotFound
         }
+        return try parse(data)
+    }
+
+    static func parse(_ data: Data) throws -> ClaudeUsageSnapshot {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ReadError.decodeFailed
         }
@@ -108,7 +112,7 @@ enum ClaudeUsageMonitorReader {
         )
     }
 
-    private static func parseWindow(_ value: Any?) -> ClaudeRateLimitWindow? {
+    static func parseWindow(_ value: Any?) -> ClaudeRateLimitWindow? {
         guard let dict = value as? [String: Any],
               let used = dict["usedPercent"] as? NSNumber else { return nil }
         let resetsAt = (dict["resetsAt"] as? String).flatMap(parseISODate)

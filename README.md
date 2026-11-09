@@ -1,86 +1,117 @@
+**English** · [한국어](README.ko.md)
+
 # AI Usage Bar
 
-A macOS menu bar app that shows your **Claude** and **Codex (ChatGPT)** subscription usage —
-5-hour and weekly limits — as one compact item, without spending a model token to check.
+A macOS menu bar app that shows how much of your **Claude** and **Codex (ChatGPT)** 5-hour and weekly
+limits is left, and nudges you before a window resets with quota to spare.
 
-## Screenshots / 스크린샷
+It never sends a prompt or asks a model for anything. (That is **not** the same as "free of any cost or risk":
+see [Accuracy and limitations](#accuracy-and-limitations).)
 
-**Menu bar / 메뉴 막대** — Codex (left) and Claude (right): top = 5-hour remaining %, bottom = weekly remaining %.
+> Independent, unofficial tool. Not affiliated with Anthropic or OpenAI. Parts of it rely on undocumented
+> interfaces; read [Accuracy and limitations](#accuracy-and-limitations) and the [Disclaimer](#disclaimer) before use.
 
-![Menu bar: Codex 100/84, Claude 27/81](docs/menu-bar.png)
+## UI preview
 
-**Detail menu / 상세 메뉴** — reset times, last refresh, plan and model, refresh interval, service selection, colors, alert thresholds, and notification settings.
+**Menu bar** — Codex (left) and Claude (right). Top number: 5-hour **remaining %**. Bottom number: weekly remaining %.
+Orange is the 5-hour window, blue is the weekly window. In this screenshot: Codex 100 / 84, Claude 27 / 81.
 
-<img src="docs/detail-menu.png" alt="Detail menu with Claude and Codex usage, reset times, and settings" width="460">
+![Menu bar: Codex 100 / 84 remaining, Claude 27 / 81 remaining](docs/menu-bar.png)
 
-Each service gets its own icon + two stacked numbers (top: 5-hour remaining %, bottom: weekly
-remaining %). Only use one of the two services? Pick just that one on first launch (or change it
-anytime from the menu) — no need to see a useless "100/100" block for a service you don't use.
+**Detail menu** — reset times, last record time, plan, model, and settings. In this screenshot: Claude 27% / 81% left,
+Codex 100% / 84% left.
 
-> The numbers are **remaining percentages**. In the preview above, Codex has 56% / 13% left
-> and Claude has 100% / 93% left. Orange is the 5-hour window; blue is the weekly window.
+<img src="docs/detail-menu.png" alt="Detail menu: Claude 27% and 81% left, Codex 100% and 84% left, with reset times and settings" width="460">
+
+> The screenshots come from an earlier build. Newer menu items (reset-soon alert, usage coach, weekly pace line,
+> live-usage and renewal toggles) are not shown, and the menu now says **stale** / **unknown** instead of a number when a
+> value can't be trusted.
+
+Only use one of the two services? Pick it on first launch (or any time from the menu).
 
 ## Features
 
-- Live 5-hour / weekly remaining percentage for both Claude and Codex
-- Claude Desktop account-wide usage, with Claude Code's local monitor as a fallback
-- Pick which service(s) to track on first launch, change anytime via the menu
-- Configurable refresh interval (30s / 1min / 5min), picked from the menu
-- Hover for exact reset date/time; click the menu for plan, model, and reasoning effort
-- Native macOS notifications when usage crosses a configurable threshold, plus a built-in test action
-- Keeps the Claude block visible while disconnected so setup is always reachable
-- Launches at login and restarts itself if it crashes (LaunchAgent)
-- No Dock icon — lives in the menu bar only
+- 5-hour and weekly **remaining %** for Claude and Codex in one compact menu bar item
+- Reset time, last record time, plan and model in the detail menu; configurable refresh interval (30 s / 1 min / 5 min)
+- **Stale / unknown instead of a wrong number.** A value that is old, or belongs to a window that already reset, is
+  shown as `—` in the bar and labelled *stale* in the menu. It never triggers alerts or plans.
+- Threshold alerts (e.g. 20/40/60/80/90/95 % used), custom thresholds, sound choice, test notification
+- **Reset-soon alert**: a heads-up shortly before a 5-hour window resets while plenty is left (off by default; skipped if
+  the weekly limit is nearly used up; honors your quiet hours — any number of time ranges)
+- **Usage coach**: split the current 5-hour window into parts (e.g. 30 / 30 / 30) with a reminder at the start of each
+  part; a fast-pace warning ("at this pace the limit runs out before the reset"); a weekly pace line ("about 20 % per
+  day"); and a list of tasks you'd like to hand to Claude/Codex when quota is left. These are **reminders only** —
+  the app never runs anything for you.
+- Choose what the menu bar icons open (web Chat / Codex / Projects, or the desktop apps; Claude can open a new Code window)
+- Optional jump to the desktop (Space) of a Claude session from a notification you wire up yourself ([hook](#notification-hook-optional))
+- English by default, Korean when the system language is Korean (switchable in the menu)
+- Launches at login, restarts after a crash (LaunchAgent); no Dock icon
 
-### Clicking
+## Accuracy and limitations
 
-- **Click the Claude or GPT icon**: opens the place you choose under **Icon click action** in the menu. GPT: web Chat / Codex / Projects, or the ChatGPT desktop app (default: web Projects). Claude: a new Code or Chat window on the desktop you're looking at, a jump to your last window, or web Chat / Claude Code / Projects (default: new Code window)
-- **Click the numbers, or right-click**: opens the detail menu (5h / weekly / refresh / quit)
+### Where the numbers come from
 
-## Why it never costs you a token
+| Source | How it is read | What it is | Default |
+| --- | --- | --- | --- |
+| **Codex** | `codex app-server --stdio`, JSON-RPC `account/rateLimits/read`, using the official Codex CLI you already have | Official CLI, but the app-server protocol is marked **experimental** and may change | on (if Codex is selected) |
+| **Claude, live** | `GET https://api.anthropic.com/api/oauth/usage` with the Claude Code sign-in token already on your Mac | **Unofficial, undocumented endpoint** and **reuse of a sign-in credential**. Whether this is allowed by Anthropic's terms is **uncertain** (see below) | **off until you allow it**; the dialog's default button is "No thanks" |
+| **Claude Desktop record** | `~/Library/Application Support/Claude/plan-usage-history.json` | A local file Claude Desktop writes in its own internal format; not a documented interface | on (read-only) |
+| **Claude Code local file** | `~/.claude/state/usage-monitor.json` | A local file that is **not** part of the official Claude Code. It only exists if something on your Mac writes it. Used only if present | on (read-only) |
+| **Claude Desktop screen reading** | Accessibility API reading the usage indicators in the Claude Desktop UI | UI scraping, last-resort fallback, needs Accessibility permission | only when the other sources are stale and you have granted permission |
 
-This app never sends a prompt or generates a response.
+Claude Desktop's local record can lag by hours when you haven't used the app; without live usage the Claude numbers are
+only as fresh as the local files. That is why they are marked **stale** rather than shown as if current.
 
-- **Codex**: talks to the official Codex CLI's `codex app-server --stdio` over JSON-RPC
-  (`account/rateLimits/read`, `config/read`) and checks `codex login status` for login state.
-- **Claude**: queries Anthropic's usage endpoint (`/api/oauth/usage`, undocumented) with the OAuth token
-  Claude Code already stores, once every 60 seconds at most. Usage is per account, so the numbers are
-  current no matter whether you used the web, Claude Desktop, or the terminal. If that fails, it falls
-  back to Claude Desktop's local `plan-usage-history.json`, Claude Code's
-  `~/.claude/state/usage-monitor.json`, and finally (only if values are stale, with Accessibility
-  permission) the usage indicators Claude Desktop displays. The reason for any failure is shown in the
-  menu's status line.
+### What "stale" and "unknown" mean
 
-Neither path ever calls the model, so running this continuously costs zero tokens and doesn't
-consume your 5-hour/weekly quota.
+- **stale**: older than 30 minutes, or its reset time is already in the past (the value belongs to a finished window).
+- **unknown**: no usable record time (or a time in the future).
+- Stale and unknown values are never drawn as a percentage in the bar, and are never used for alerts, plans or coaching.
+  This is covered by unit tests (`FreshnessTests`).
 
-## Data and privacy
+### "Never calls a model" is not "no cost or risk"
 
-- Never reads browser cookies or conversation contents.
-- **Claude live usage is opt-in.** On first launch the app asks for your consent. If you allow it, the app reads
-  the Claude Code login token that is already stored on your Mac (`~/.claude/.credentials.json` or the macOS
-  Keychain item `Claude Code-credentials`; macOS asks for permission) and sends it **only** to
-  `api.anthropic.com` to read your usage. When the token expires, the app renews it and writes the renewed
-  token back to the same place, so your Claude Code login keeps working. The token is not logged, and it is not
-  stored anywhere else or sent anywhere else.
-- If you do not allow it, the app only uses the local usage records that Claude Desktop and Claude Code already
-  leave on your Mac, which can be a little behind. You can change your choice any time from the menu.
-- Clicking a task-done notification switches to the desktop (Space) where that Claude session is open. It does
-  this by reading Claude window titles (Screen Recording permission) and pressing the system's Space-switch
-  keyboard shortcuts (Accessibility permission). Nothing is recorded, stored, or sent anywhere.
-- Codex usage continues to come from the official local Codex app-server.
+- The app never sends a prompt, so it does **not** spend model tokens from your quota.
+- It does **not** follow that nothing is involved: the live Claude check is an HTTPS request to Anthropic's servers made
+  with your sign-in. It can be rate-limited (HTTP 429; the app waits at least 2 minutes between calls and 15 minutes after
+  a 429), it can stop working when Anthropic changes the endpoint, and Anthropic may treat it differently from official use.
+- Reusing your Claude Code sign-in outside Claude Code **may not be permitted** by Anthropic's terms
+  ([Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance),
+  [Consumer Terms](https://www.anthropic.com/legal/consumer-terms)). That is why the feature is opt-in, and why renewing an expired
+  sign-in is a **separate, additional opt-in** (off by default). If you want zero exposure, decline live usage: the app still works
+  from the local records.
+- OpenAI's terms for ChatGPT-plan sign-in were not reviewable in full when this was written; check them yourself.
 
-`codex app-server` is currently marked experimental by the Codex CLI; a future CLI protocol
-change may require an app update.
+### Security notes
 
-## Requirements
+- The Claude token is read only after you allow live usage. It is kept in memory, never logged, never stored elsewhere, and sent
+  only to `api.anthropic.com`.
+- Renewing an expired token (opt-in) rotates Claude Code's own refresh token and writes it back to where Claude Code keeps it
+  (`~/.claude/.credentials.json`, keeping owner-only permissions, or the macOS Keychain item `Claude Code-credentials`, same account
+  name). If saving fails you may have to run `claude auth login`.
+- Keychain access prompts come from macOS; choose **Always Allow** once rather than typing your password repeatedly.
+- Screen Recording (to read window titles) and Accessibility (to press Space-switch shortcuts) are requested **only when you use
+  a feature that needs them** (clicking a notification that jumps to a Claude window, or the "new window" icon action) — not at
+  launch. The Claude Desktop screen-reading fallback never asks for permission itself; it only works if you already granted
+  Accessibility. Nothing is recorded, stored or sent.
+- The app does not read browser cookies or conversation contents.
+- The Space jump uses private macOS APIs (CGS) and synthesized keyboard shortcuts; it can break after a macOS or Claude update.
 
-- macOS 13+
-- Claude Desktop signed in (Claude Code CLI is optional)
-- [Codex CLI](https://github.com/openai/codex) installed and logged in (for the Codex block)
-- Xcode Command Line Tools + Swift 6+ (only needed to build from source)
+### What has and has not been verified
+
+- **Unit-tested** (43 tests, Swift Testing): usage parsing for every source, clamping and malformed input, HTTP 200/401/403/429/5xx,
+  decode failure and connection loss for the Claude endpoint, credential parsing/expiry and file permissions, freshness rules,
+  plan / pace / weekly-guide logic and quiet hours.
+- **Checked by hand on the author's Mac (macOS 26)**: install, update over a running copy, crash restart, uninstall and reinstall;
+  live Claude and Codex numbers compared against the local records.
+- **Not verified**: the GitHub Actions workflow has not run yet; Intel Macs; macOS versions other than the author's; the Claude Desktop
+  screen-reading fallback and the icon-click web/desktop destinations after the latest changes; the Korean/English UI for every message.
+- The screenshots are from an earlier build.
 
 ## Install
+
+Requirements: macOS 13+, Xcode Command Line Tools (to build; `xcode-select --install`), and Claude Desktop / Claude Code and/or
+the [Codex CLI](https://github.com/openai/codex), signed in.
 
 ```bash
 git clone https://github.com/sihunwang-skala/ai-usage-bar.git
@@ -88,52 +119,44 @@ cd ai-usage-bar
 ./install.sh
 ```
 
-This builds a release binary, packages it as `AI Usage Bar.app`, copies it to `/Applications`,
-and registers a LaunchAgent so it starts automatically at login. See
-[INSTALL.md](INSTALL.md) for a step-by-step walkthrough, including how to get past the
-"unidentified developer" Gatekeeper warning on first launch.
+This builds a release binary, installs `AI Usage Bar.app` into `/Applications`, and registers a LaunchAgent so it starts at login.
+See [INSTALL.md](INSTALL.md) for a walkthrough, including the "unidentified developer" warning.
 
-To uninstall:
+- **Update**: pull and run `./install.sh` again. It stops the running copy, replaces the app and restarts it. Your settings are kept.
+- **Uninstall**: `./uninstall.sh` removes the app and LaunchAgent and keeps your settings and logs; `./uninstall.sh --purge` also deletes
+  settings and logs. Remove Screen Recording / Accessibility entries yourself in System Settings → Privacy & Security.
+- **Keep macOS permissions across rebuilds** (optional): run `./setup-signing.sh` once. It creates a local signing certificate used
+  only on this Mac. Without it, builds are ad-hoc signed and macOS asks for the permissions again after every build.
+- **Custom CLI locations**: set `CODEX_PATH` / `CLAUDE_PATH` in the LaunchAgent plist (`EnvironmentVariables`).
+
+## Technical overview
+
+```
+Sources/AIUsageBar
+├─ Claude/        ClaudeOAuthUsageReader (live endpoint, token handling) · ClaudeModels (local record parsers) ·
+│                 ClaudeDesktopAccessibilityReader (screen-reading fallback) · ClaudeWindowFocuser (Space jump)
+├─ Codex/         CodexAppServerClient (JSON-RPC over stdio) · CodexModels (parser)
+├─ Combined/      CombinedStatusController (menu bar UI, menu, refresh timers, throttling)
+├─ Coach/         UsageCoach (plan, pace, weekly guide) · CoachMenu
+├─ Notifications/ ThresholdNotifier (threshold and reset-soon alerts)
+├─ UsageFreshness.swift   fresh / stale / unknown rules
+└─ *Preferences.swift, Localization.swift, IconClickAction.swift, AppDelegate.swift, main.swift
+Tests/AIUsageBarTests     Swift Testing suites
+```
+
+- Swift 6, SwiftPM, no third-party dependencies, `LSUIElement` menu bar app, LaunchAgent `com.aiusagebar.app`.
+- Notifications need the bundled `.app` (`UNUserNotificationCenter`); `./run.sh` runs the raw binary without notifications.
+- Logs: `~/Library/Logs/AIUsageBar/ai-usage-bar.log`.
+
+### Develop
 
 ```bash
-./uninstall.sh
+./run.sh              # quick run, no notifications
+./build-app.sh        # dist/AIUsageBar.app
+./scripts/test.sh     # swift test (adds Swift Testing paths on Command Line Tools-only Macs)
 ```
 
-### Custom CLI locations
-
-If `codex` or `claude` aren't at their default Homebrew paths, set an environment variable
-before running the app (edit the LaunchAgent plist at
-`~/Library/LaunchAgents/com.aiusagebar.app.plist` to add an `EnvironmentVariables` dict):
-
-```
-CODEX_PATH=/absolute/path/to/codex
-CLAUDE_PATH=/absolute/path/to/claude
-```
-
-## Development
-
-Quick iteration without the full `.app` bundle (menu bar UI works, but native notifications
-require the bundled `.app` — see below):
-
-```bash
-./run.sh
-```
-
-Build the distributable `.app`:
-
-```bash
-./build-app.sh          # produces dist/AIUsageBar.app
-```
-
-Full rebuild + reinstall + restart the running LaunchAgent:
-
-```bash
-./install.sh
-```
-
-> Notifications use `UNUserNotificationCenter`, which requires the app to run from inside a
-> real `.app` bundle with a `CFBundleIdentifier` (set in `Resources/Info.plist`). Running the
-> raw binary via `run.sh` will not show notifications.
+CI (`.github/workflows/ci.yml`, macOS runner): build, unit tests, app bundle build, `plutil -lint`, shell syntax check.
 
 ## Notification hook (optional)
 
@@ -160,29 +183,31 @@ launchctl print gui/$(id -u)/com.aiusagebar.app
 
 ### A block shows `— —` or an old timestamp
 
-- Claude: choose **Claude Desktop 최신 사용량 연결…**, grant Accessibility permission once,
-  then choose it again. Without permission the app shows Claude's local history and marks old
-  records in the detail menu. Stale values never trigger alerts.
+- Claude: values older than 30 minutes (or from a finished window) are shown as `—` / *stale* on purpose. Allow live usage in
+  the menu, or use Claude Desktop / Claude Code so the local records refresh. Stale values never trigger alerts.
 - Codex: run `codex login status` to confirm login.
 
 ### No notifications
 
-Choose **알림 테스트** from the app menu. If it reports that notifications are disabled, enable
+Choose **Test notification** (알림 테스트) from the app menu. If it reports that notifications are disabled, enable
 System Settings → Notifications → AI Usage Bar. Notifications only work when running from the
-installed `.app` bundle (see Development section above).
+installed `.app` bundle (see Technical overview above).
 
 ## License & Copyright
 
-Copyright © 2026 Sihun Wang. All rights reserved.
+Copyright © 2026 Sihun Wang.
 
 Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
 
 - **You may:** download and use this app for personal and other noncommercial purposes, and study or modify
   the source for your own noncommercial use.
-- **You may not:** use it commercially, or sell it or repackage it as your own, without prior written permission
-  from the author.
-- Everything original to this project — source code, documentation, designs, the app icon, and the name
-  "AI Usage Bar" — belongs to the author.
+- **You may also:** share copies with others for noncommercial purposes, as long as you pass along the license text
+  (the license's own terms apply; this README is a summary, not a replacement).
+- **You may not:** use it commercially, or sell it, without prior written permission from the author. The license
+  does not grant any right to the "AI Usage Bar" name or app icon beyond identifying this project.
+- This is a **source-available** license, not an OSI-approved open-source license.
+- The license covers this project's own code and documents only. It does **not** cover the Claude / ChatGPT / Codex
+  names and logos, or Anthropic's and OpenAI's services and terms.
 
 For commercial licensing, collaboration, or other inquiries, please contact the repository owner.
 
@@ -190,7 +215,7 @@ For commercial licensing, collaboration, or other inquiries, please contact the 
 
 - **Claude**, **Claude Code**, **Anthropic**, and their logos are trademarks of **Anthropic, PBC**.
   **ChatGPT**, **Codex**, **OpenAI**, and their logos are trademarks of **OpenAI**.
-- The Claude and ChatGPT/Codex icons shown in the menu bar and in the screenshots are the
+- The Claude and ChatGPT/Codex icons shown in the menu bar and in the screenshots (`docs/*.png` contain them) are the
   **official logos and app icons of Anthropic and OpenAI**. They are used only to identify those services
   (nominative use). All rights to them belong to their respective owners. They are **not** covered by this
   project's license and remain subject to the owners' brand guidelines.
@@ -199,7 +224,7 @@ For commercial licensing, collaboration, or other inquiries, please contact the 
   Anthropic or OpenAI.
 - If a rights holder objects to the use of any logo or name, please contact the repository owner and it will be
   removed promptly.
-- This project has no third-party code dependencies.
+- This project has no third-party code dependencies. (Tests use Apple's Swift Testing; CI uses GitHub-hosted runners.)
 
 ### Disclaimer
 
@@ -210,34 +235,3 @@ For commercial licensing, collaboration, or other inquiries, please contact the 
 - The software is provided "as is", without warranty of any kind, and the author is not liable for any damages
   (see the [LICENSE](LICENSE)).
 - Usage numbers are for reference only and may differ from the official figures.
-
-## 라이선스 및 저작권
-
-Copyright © 2026 Sihun Wang. All rights reserved.
-
-[PolyForm Noncommercial License 1.0.0](LICENSE)에 따라 배포됩니다.
-
-- **가능한 것:** 개인적·비영리 목적으로 이 앱을 다운로드해 사용할 수 있고, 본인의 비영리 사용을 위해 소스를
-  살펴보거나 수정할 수 있습니다.
-- **불가능한 것:** 저작자의 사전 서면 허가 없이 상업적으로 이용하거나, 판매하거나, 자기 것처럼 다시 포장해
-  배포할 수 없습니다.
-- 소스 코드, 문서, 디자인, 앱 아이콘, "AI Usage Bar"라는 이름 등 이 프로젝트 고유의 결과물은 모두
-  저작자의 것입니다.
-
-상업적 라이선스, 협업 및 기타 문의는 저장소 소유자에게 연락해 주세요.
-
-### 상표, 로고 및 제3자 자료
-
-- **Claude**, **Claude Code**, **Anthropic** 및 관련 로고는 **Anthropic, PBC**의 상표이고, **ChatGPT**, **Codex**, **OpenAI** 및 관련 로고는 **OpenAI**의 상표입니다.
-- 메뉴 막대와 스크린샷에 보이는 Claude와 ChatGPT/Codex 아이콘은 각각 Anthropic과 OpenAI의 **공식 로고 및 앱 아이콘**입니다. 해당 서비스를 구분하는 용도로만 사용했으며(지칭 목적의 사용), 모든 권리는 각 소유자에게 있습니다. 이 프로젝트의 라이선스 적용 대상이 **아니며** 각 소유자의 브랜드 가이드라인을 따릅니다.
-- 앱 자체는 이 아이콘 파일을 포함하지 않고, 사용자의 컴퓨터에 설치된 Claude와 Codex 앱에서 읽어옵니다.
-- 이 프로젝트는 독립적인 비공식 도구이며 Anthropic 또는 OpenAI와 **제휴, 후원, 승인 관계가 없습니다.**
-- 권리자가 로고나 이름의 사용에 이의를 제기하면 저장소 소유자에게 연락해 주세요. 즉시 삭제하겠습니다.
-- 이 프로젝트에는 서드파티 코드 의존성이 없습니다.
-
-### 면책 조항
-
-- 이 앱은 **비공식 엔드포인트와 macOS 비공개 API**에 의존하며, 언제든 바뀌거나 동작하지 않을 수 있습니다.
-- 로그인 토큰을 비공식 도구에 쓰는 것은 서비스 제공자의 약관에서 허용되지 않을 수 있습니다. 그래서 이 기능은 사용자가 동의해야만 켜집니다. Anthropic과 OpenAI의 약관은 직접 확인해 주세요. **사용에 따른 위험과 책임은 사용자에게 있습니다.**
-- 소프트웨어는 어떠한 보증 없이 "있는 그대로" 제공되며, 저작자는 어떠한 손해에 대해서도 책임지지 않습니다([LICENSE](LICENSE) 참고).
-- 표시되는 사용량 수치는 참고용이며 공식 수치와 다를 수 있습니다.

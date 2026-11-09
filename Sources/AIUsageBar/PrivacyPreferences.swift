@@ -11,6 +11,53 @@ enum PrivacyPreferences {
         set { UserDefaults.standard.set(newValue, forKey: claudeTokenConsentKey) }
     }
 
+    private static let claudeTokenRenewalKey = "claudeTokenRenewal"
+
+    /// 만료된 Claude Code 로그인을 이 앱이 대신 갱신해 Claude Code 저장소에 다시 써도 되는지. 기본 꺼짐.
+    /// 갱신하면 refresh token이 바뀌므로 위 동의와 따로 묻는다.
+    static var claudeTokenRenewal: Bool {
+        get { UserDefaults.standard.bool(forKey: claudeTokenRenewalKey) }
+        set { UserDefaults.standard.set(newValue, forKey: claudeTokenRenewalKey) }
+    }
+
+    /// 갱신 허용 여부를 묻는다. 허용하면 true.
+    @discardableResult
+    static func askClaudeTokenRenewal() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = tr("Renew expired sign-in automatically?", "만료된 로그인을 자동으로 갱신할까요?")
+        alert.informativeText = tr("""
+        Claude Code's sign-in expires every few hours. If you don't open Claude Code for a while, live lookups pause.
+
+        If you allow it:
+        • AI Usage Bar renews it when it expires
+        • The renewed sign-in is saved to the same place Claude Code keeps it
+
+        Please note:
+        • This changes Claude Code's own sign-in. If saving fails, run `claude auth login` again
+        • This is an unofficial tool and may be outside Anthropic's terms. Please check them first
+
+        It is off by default.
+        """, """
+        Claude Code 로그인은 몇 시간마다 만료돼요. 한동안 Claude Code를 열지 않으면 실시간 조회가 멈춰요.
+
+        허용하면
+        • 만료됐을 때 AI Usage Bar가 대신 갱신해요
+        • 갱신된 로그인을 Claude Code가 쓰는 같은 곳에 다시 저장해요
+
+        알아 두세요
+        • Claude Code의 로그인 자체가 바뀌어요. 저장에 실패하면 `claude auth login`으로 다시 로그인해야 해요
+        • 비공식 도구라 Anthropic 약관 밖일 수 있어요. 켜기 전에 약관을 확인해 주세요
+
+        기본값은 꺼짐이에요.
+        """)
+        alert.addButton(withTitle: tr("Keep off", "켜지 않음"))
+        alert.addButton(withTitle: tr("Allow renewal", "갱신 허용"))
+        NSApp.activate(ignoringOtherApps: true)
+        let allowed = alert.runModal() == .alertSecondButtonReturn
+        claudeTokenRenewal = allowed
+        return allowed
+    }
+
     /// 현재 새로고침 주기(초). 메뉴에서 고른 값이다.
     private static var refreshSeconds: Int {
         let stored = UserDefaults.standard.double(forKey: "refreshIntervalSeconds")
@@ -45,10 +92,11 @@ enum PrivacyPreferences {
 
         설정은 메뉴에서 언제든 바꿀 수 있어요. 이 앱은 비공식 도구이니 Anthropic 이용약관도 한 번 살펴봐 주세요.
         """)
-        alert.addButton(withTitle: tr("Allow", "허용"))
+        // 기본(엔터) 버튼은 "허용 안 함"이다. 로그인 정보를 쓰는 기능은 사용자가 직접 눌러야만 켜진다.
         alert.addButton(withTitle: tr("No thanks", "허용 안 함"))
+        alert.addButton(withTitle: tr("Allow", "허용"))
         NSApp.activate(ignoringOtherApps: true)
-        let allowed = alert.runModal() == .alertFirstButtonReturn
+        let allowed = alert.runModal() == .alertSecondButtonReturn
         claudeTokenConsent = allowed
         return allowed
     }

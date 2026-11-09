@@ -40,6 +40,32 @@ final class CombinedStatusController {
 
     private let codexClient = CodexAppServerClient()
     private let notifier = ThresholdNotifier()
+    private lazy var coach = UsageCoach(notifier: notifier)
+    private lazy var coachMenu = CoachMenu(coach: coach)
+    private var claudeHistoryItem: NSMenuItem = {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.isHidden = true
+        return item
+    }()
+    private var claudeGuideItem: NSMenuItem = {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.isHidden = true
+        return item
+    }()
+    private var codexHistoryItem: NSMenuItem = {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.isHidden = true
+        return item
+    }()
+    private var codexGuideItem: NSMenuItem = {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.isHidden = true
+        return item
+    }()
 
     private var claudeAccountInfo = ClaudeAccountInfoReader.Info(loggedIn: false, plan: nil, model: nil)
     private var usageTimer: Timer?
@@ -316,35 +342,46 @@ final class CombinedStatusController {
         testNotificationItem.target = self
         let soundItem = NSMenuItem(title: tr("Alert sound", "알림 소리"), action: nil, keyEquivalent: "")
         soundItem.submenu = buildSoundMenu()
-        let tokenConsentItem = NSMenuItem(title: tr("Live Claude usage (uses your Claude Code sign-in)", "Claude 실시간 조회 (로그인 정보 사용)"), action: #selector(toggleClaudeTokenConsent(_:)), keyEquivalent: "")
-        tokenConsentItem.target = self
-        tokenConsentItem.state = PrivacyPreferences.claudeTokenConsent == true ? .on : .off
+        let liveItem = NSMenuItem(title: tr("Claude live lookup · every 2 min", "Claude 실시간 조회 · 2분 간격"), action: nil, keyEquivalent: "")
+        liveItem.submenu = buildClaudeLiveMenu()
         let taskSourceItem = NSMenuItem(title: tr("Task-done notifications", "작업 완료 알림"), action: nil, keyEquivalent: "")
         taskSourceItem.submenu = buildTaskSourceMenu()
         let quit = NSMenuItem(title: tr("Quit", "종료"), action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
         menu.addItem(claudeHeaderItem)
-        [claudeFiveHourItem!, claudeWeeklyItem!, claudeStatusItem!].forEach { menu.addItem($0) }
+        [claudeFiveHourItem!, claudeWeeklyItem!, claudeGuideItem, claudeHistoryItem, claudeStatusItem!].forEach { menu.addItem($0) }
         menu.addItem(.separator())
         menu.addItem(codexHeaderItem)
-        [codexFiveHourItem!, codexWeeklyItem!, codexStatusItem!].forEach { menu.addItem($0) }
+        [codexFiveHourItem!, codexWeeklyItem!, codexGuideItem, codexHistoryItem, codexStatusItem!].forEach { menu.addItem($0) }
         menu.addItem(.separator())
+        // 1) 갱신·서비스
         menu.addItem(refreshItem)
         menu.addItem(intervalItem)
         menu.addItem(servicesItem)
-        menu.addItem(colorsItem)
+        menu.addItem(.separator())
+        // 2) Claude 로그인 정보를 쓰는 기능
+        menu.addItem(liveItem)
+        menu.addItem(.separator())
+        // 3) 알림 관련
         menu.addItem(notificationsItem)
-        menu.addItem(tokenConsentItem)
+        let preResetItem = NSMenuItem(title: tr("Reset-soon alert", "리셋 임박 알림"), action: nil, keyEquivalent: "")
+        preResetItem.submenu = buildPreResetMenu()
+        menu.addItem(preResetItem)
+        menu.addItem(coachMenu.makeItem())
         menu.addItem(taskSourceItem)
+        menu.addItem(soundItem)
+        menu.addItem(testNotificationItem)
+        menu.addItem(.separator())
+        // 4) 표시·동작
+        menu.addItem(colorsItem)
         let iconActionItem = NSMenuItem(title: tr("Icon click action", "아이콘 클릭 동작"), action: nil, keyEquivalent: "")
         iconActionItem.submenu = buildIconActionMenu()
         menu.addItem(iconActionItem)
         let languageItem = NSMenuItem(title: "언어 / Language", action: nil, keyEquivalent: "")
         languageItem.submenu = buildLanguageMenu()
         menu.addItem(languageItem)
-        menu.addItem(testNotificationItem)
-        menu.addItem(soundItem)
+        menu.addItem(.separator())
         menu.addItem(quit)
         detailMenu = menu
     }
@@ -402,17 +439,54 @@ final class CombinedStatusController {
         NotificationPreferences.thresholds = Array(Set(parsed))
     }
 
-    @objc private func toggleClaudeTokenConsent(_ sender: NSMenuItem) {
-        if PrivacyPreferences.claudeTokenConsent == true {
-            PrivacyPreferences.claudeTokenConsent = false
-            sender.state = .off
-            claudeAPISnapshot = nil
-            refreshClaude()
-        } else {
-            let allowed = PrivacyPreferences.askClaudeTokenConsent()
-            sender.state = allowed ? .on : .off
-            if allowed { nextClaudeAPIAttempt = .distantPast; refreshClaude() }
+    /// 0 = 사용 안 함(로컬 기록만), 1 = 실시간 조회, 2 = 실시간 조회 + 만료 시 자동 갱신. 셋 중 하나만 고른다.
+    private static var claudeLiveMode: Int {
+        guard PrivacyPreferences.claudeTokenConsent == true else { return 0 }
+        return PrivacyPreferences.claudeTokenRenewal ? 2 : 1
+    }
+
+    private func buildClaudeLiveMenu() -> NSMenu {
+        let submenu = NSMenu()
+        let options: [(Int, String)] = [
+            (0, tr("Off (local records only)", "사용 안 함 (로컬 기록만)")),
+            (1, tr("Live lookup (uses your Claude Code sign-in)", "실시간 조회 (Claude Code 로그인 정보 사용)")),
+            (2, tr("Live lookup + renew expired sign-in", "실시간 조회 + 만료된 로그인 자동 갱신"))
+        ]
+        for (mode, title) in options {
+            let item = NSMenuItem(title: title, action: #selector(claudeLiveModeSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode
+            item.state = Self.claudeLiveMode == mode ? .on : .off
+            submenu.addItem(item)
         }
+        submenu.addItem(.separator())
+        let note = NSMenuItem(title: tr("Lookups are at least 2 min apart (15 min after a rate limit).", "조회는 최소 2분 간격이에요 (제한되면 15분 쉼)."), action: nil, keyEquivalent: "")
+        note.isEnabled = false
+        submenu.addItem(note)
+        return submenu
+    }
+
+    @objc private func claudeLiveModeSelected(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? Int else { return }
+        switch mode {
+        case 0:
+            PrivacyPreferences.claudeTokenConsent = false
+            PrivacyPreferences.claudeTokenRenewal = false
+        default:
+            if PrivacyPreferences.claudeTokenConsent != true, !PrivacyPreferences.askClaudeTokenConsent() {
+                PrivacyPreferences.claudeTokenRenewal = false
+                break
+            }
+            if mode == 2 {
+                PrivacyPreferences.askClaudeTokenRenewal()
+            } else {
+                PrivacyPreferences.claudeTokenRenewal = false
+            }
+        }
+        let current = Self.claudeLiveMode
+        sender.menu?.items.forEach { if let m = $0.representedObject as? Int { $0.state = (m == current) ? .on : .off } }
+        if current == 0 { claudeAPISnapshot = nil } else { nextClaudeAPIAttempt = .distantPast }
+        refreshClaude()
     }
 
     private func buildIconActionMenu() -> NSMenu {
@@ -496,6 +570,98 @@ final class CombinedStatusController {
         note.isEnabled = false
         submenu.addItem(note)
         return submenu
+    }
+
+    private func buildPreResetMenu() -> NSMenu {
+        let submenu = NSMenu()
+        func add(_ title: String, _ action: Selector, _ value: Any?, on: Bool, to menu: NSMenu) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            item.state = on ? .on : .off
+            menu.addItem(item)
+        }
+        add(tr("Alert before 5-hour reset", "5시간 리셋 전에 알리기"), #selector(preResetToggled(_:)), nil, on: NotificationPreferences.preResetEnabled, to: submenu)
+        submenu.addItem(.separator())
+        let leadMenu = NSMenu()
+        for m in [30, 60, 120] {
+            add(tr("\(m) min before", "\(m)분 전"), #selector(preResetLeadSelected(_:)), m, on: NotificationPreferences.preResetLeadMinutes == m, to: leadMenu)
+        }
+        let leadItem = NSMenuItem(title: tr("When", "알리는 시점"), action: nil, keyEquivalent: "")
+        leadItem.submenu = leadMenu
+        submenu.addItem(leadItem)
+        let minMenu = NSMenu()
+        for p in [20, 30, 50] {
+            add(tr("\(p)% or more left", "\(p)% 이상 남았을 때"), #selector(preResetMinSelected(_:)), p, on: NotificationPreferences.preResetMinRemaining == p, to: minMenu)
+        }
+        let minItem = NSMenuItem(title: tr("Only if remaining is", "남은 양 기준"), action: nil, keyEquivalent: "")
+        minItem.submenu = minMenu
+        submenu.addItem(minItem)
+        let quietMenu = NSMenu()
+        for (i, r) in NotificationPreferences.quietRanges.enumerated() {
+            add(String(format: "%02d:00–%02d:00  ✕", r.start, r.end), #selector(quietRangeRemoved(_:)), i, on: true, to: quietMenu)
+        }
+        if NotificationPreferences.quietRanges.isEmpty {
+            let none = NSMenuItem(title: tr("None", "없음"), action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            quietMenu.addItem(none)
+        }
+        quietMenu.addItem(.separator())
+        add(tr("Add a time range…", "시간대 추가…"), #selector(quietRangeAdd), nil, on: false, to: quietMenu)
+        let quietItem = NSMenuItem(title: tr("Quiet hours", "조용한 시간"), action: nil, keyEquivalent: "")
+        quietItem.submenu = quietMenu
+        submenu.addItem(quietItem)
+        let note = NSMenuItem(title: tr("Only sends a heads-up. It never uses Claude/Codex for you.", "알려 주기만 해요. 대신 사용하지는 않아요."), action: nil, keyEquivalent: "")
+        note.isEnabled = false
+        submenu.addItem(.separator())
+        submenu.addItem(note)
+        return submenu
+    }
+
+    @objc private func preResetToggled(_ sender: NSMenuItem) {
+        NotificationPreferences.preResetEnabled.toggle()
+        sender.state = NotificationPreferences.preResetEnabled ? .on : .off
+    }
+    @objc private func preResetLeadSelected(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? Int else { return }
+        NotificationPreferences.preResetLeadMinutes = v
+        sender.menu?.items.forEach { $0.state = ($0 === sender) ? .on : .off }
+    }
+    @objc private func preResetMinSelected(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? Int else { return }
+        NotificationPreferences.preResetMinRemaining = v
+        sender.menu?.items.forEach { $0.state = ($0 === sender) ? .on : .off }
+    }
+    @objc private func quietRangeAdd() {
+        let alert = NSAlert()
+        alert.messageText = tr("Add quiet hours", "조용한 시간 추가")
+        alert.informativeText = tr("Reset alerts are not sent during this time. Hours are 0–23.", "이 시간에는 리셋 임박 알림을 보내지 않아요. 시각은 0~23 중에서 고르세요.")
+        let row = NSStackView(frame: NSRect(x: 0, y: 0, width: 240, height: 26))
+        row.orientation = .horizontal
+        func popup(_ initial: Int) -> NSPopUpButton {
+            let p = NSPopUpButton(frame: .zero, pullsDown: false)
+            p.addItems(withTitles: (0..<24).map { String(format: "%02d:00", $0) })
+            p.selectItem(at: initial)
+            return p
+        }
+        let from = popup(23), to = popup(8)
+        let dash = NSTextField(labelWithString: "→")
+        [from, dash, to].forEach { row.addArrangedSubview($0) }
+        alert.accessoryView = row
+        alert.addButton(withTitle: tr("Add", "추가"))
+        alert.addButton(withTitle: tr("Cancel", "취소"))
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let range = (start: from.indexOfSelectedItem, end: to.indexOfSelectedItem)
+        guard range.start != range.end else { return }
+        NotificationPreferences.quietRanges.append(range)
+    }
+    @objc private func quietRangeRemoved(_ sender: NSMenuItem) {
+        guard let i = sender.representedObject as? Int else { return }
+        var ranges = NotificationPreferences.quietRanges
+        guard ranges.indices.contains(i) else { return }
+        ranges.remove(at: i)
+        NotificationPreferences.quietRanges = ranges
     }
 
     @objc private func taskSourceSelected(_ sender: NSMenuItem) {
@@ -613,6 +779,15 @@ final class CombinedStatusController {
             item.state = refreshInterval == option.seconds ? .on : .off
             submenu.addItem(item)
         }
+        // 선택한 주기는 Codex와 Claude 로컬 기록에 그대로 적용된다. Claude 실시간 조회만 서버 보호를 위해 최소 2분이다.
+        submenu.addItem(.separator())
+        let note = NSMenuItem(
+            title: tr("Codex and local records follow this. Live Claude lookups are at least 2 min apart.",
+                      "Codex와 로컬 기록은 이 주기를 따라요. Claude 실시간 조회는 최소 2분 간격이에요."),
+            action: nil, keyEquivalent: ""
+        )
+        note.isEnabled = false
+        submenu.addItem(note)
         return submenu
     }
 
@@ -705,7 +880,7 @@ final class CombinedStatusController {
     }
 
     private static func isStale(_ snapshot: ClaudeUsageSnapshot) -> Bool {
-        snapshot.updatedAt.map { Date().timeIntervalSince($0) > 30 * 60 } ?? true
+        UsageFreshnessPolicy.evaluate(updatedAt: snapshot.updatedAt, windowResetsAt: nil) != .fresh
     }
 
     /// 사용량 API 조회. 웹·Desktop·터미널 어디서 썼든 계정 전체 최신값을 가져온다.
@@ -719,9 +894,10 @@ final class CombinedStatusController {
         // 그 사이에는 Desktop/Code 로컬 기록과 화면 값이 계속 갱신된다.
         nextClaudeAPIAttempt = Date().addingTimeInterval(max(refreshInterval - 1, Self.claudeAPIMinInterval))
         let reader = claudeOAuthReader
+        let allowRenewal = PrivacyPreferences.claudeTokenRenewal
         Task { [weak self] in
             do {
-                let snapshot = try await reader.fetch()
+                let snapshot = try await reader.fetch(allowRenewal: allowRenewal)
                 self?.claudeAPIDidSucceed(snapshot)
             } catch {
                 self?.claudeAPIDidFail(error)
@@ -802,31 +978,42 @@ final class CombinedStatusController {
     private func renderClaude(_ snapshot: ClaudeUsageSnapshot, source: String) {
         let five = snapshot.fiveHour
         let week = snapshot.weekly
-        let stale = Self.isStale(snapshot)
+        let fiveState = UsageFreshnessPolicy.evaluate(updatedAt: snapshot.updatedAt, windowResetsAt: five?.resetsAt)
+        let weekState = UsageFreshnessPolicy.evaluate(updatedAt: snapshot.updatedAt, windowResetsAt: week?.resetsAt)
+        let stale = fiveState != .fresh || weekState != .fresh
         claudeFiveHourItem.attributedTitle = nil
-        claudeFiveHourItem.title = line(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(claudeRemaining))
+        claudeFiveHourItem.title = windowLine(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(claudeRemaining), state: fiveState)
         claudeWeeklyItem.attributedTitle = nil
-        claudeWeeklyItem.title = line(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(claudeRemaining))
+        claudeWeeklyItem.title = windowLine(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(claudeRemaining), state: weekState)
         let plan = claudeAccountInfo.plan.map { $0.uppercased() } ?? tr("plan unknown", "요금제 알 수 없음")
         let model = claudeAccountInfo.model ?? tr("model unknown", "모델 알 수 없음")
         let checkedAt = snapshot.updatedAt.map { Self.timeFormatter.string(from: $0) } ?? tr("unknown", "알 수 없음")
         let staleReason = claudeAPIError ?? claudeAccessibilityError ?? tr("refresh needed from the Claude usage screen", "Claude 사용량 화면에서 갱신 필요")
         let freshness = stale ? tr("stale · \(staleReason)", "오래된 기록 · \(staleReason)") : tr("up to date", "최신 기록")
-        claudeStatusItem.title = tr("Recorded: \(checkedAt) | \(freshness) | \(source) | \(plan) | \(model)", "기록 시각: \(checkedAt) | \(freshness) | \(source) | \(plan) | \(model)")
+        claudeStatusItem.title = tr("Last checked: \(checkedAt) | \(freshness) | \(source) | \(plan) | \(model)", "최근 확인: \(checkedAt) | \(freshness) | \(source) | \(plan) | \(model)")
         updateClaudeConnectMenuItem()
 
-        claudeFiveText = five.map { "\(claudeRemaining($0))" } ?? "—"
-        claudeWeekText = week.map { "\(claudeRemaining($0))" } ?? "—"
+        // 믿을 수 없는 값은 숫자로 보여 주지 않는다(특히 100%로 오해되지 않게).
+        claudeFiveText = (five != nil && fiveState == .fresh) ? "\(claudeRemaining(five!))" : "—"
+        claudeWeekText = (week != nil && weekState == .fresh) ? "\(claudeRemaining(week!))" : "—"
         claudeButton.toolTip = stale
-            ? tr("Claude last record: \(checkedAt)", "Claude 마지막 기록: \(checkedAt)")
+            ? tr("Claude last record: \(checkedAt) (stale)", "Claude 마지막 기록: \(checkedAt) (오래됨)")
             : tr("Claude account-wide usage", "Claude 계정 전체 사용량")
         relayoutAndRender()
 
-        // 오래된 값으로 임계치 알림을 보내면 현재 사용량으로 오해할 수 있으므로 생략한다.
-        if !stale {
-            if let five { notifier.check(serviceName: "Claude", windowLabel: tr("5-hour", "5시간"), usedPercent: 100 - claudeRemaining(five)) }
-            if let week { notifier.check(serviceName: "Claude", windowLabel: tr("weekly", "주간"), usedPercent: 100 - claudeRemaining(week)) }
+        // 오래된 값으로 알림을 보내면 현재 사용량으로 오해할 수 있으므로 최신인 창만 알림·계획에 쓴다.
+        if let five, fiveState == .fresh {
+            notifier.check(serviceName: "Claude", windowLabel: tr("5-hour", "5시간"), usedPercent: 100 - claudeRemaining(five))
+            notifier.checkPreReset(serviceName: "Claude", resetsAt: five.resetsAt, fiveHourRemaining: claudeRemaining(five), weeklyRemaining: weekState == .fresh ? week.map(claudeRemaining) : nil)
         }
+        if let week, weekState == .fresh {
+            notifier.check(serviceName: "Claude", windowLabel: tr("weekly", "주간"), usedPercent: 100 - claudeRemaining(week))
+        }
+        updateGuide(claudeGuideItem, claudeHistoryItem, coach.evaluate(
+            service: "Claude",
+            five: (fiveState == .fresh ? five : nil).map { .init(remaining: claudeRemaining($0), resetsAt: $0.resetsAt) },
+            week: (weekState == .fresh ? week : nil).map { .init(remaining: claudeRemaining($0), resetsAt: $0.resetsAt) }
+        ))
     }
 
     private func renderClaudeError(_ error: Error) {
@@ -868,6 +1055,13 @@ final class CombinedStatusController {
         }
     }
 
+    private func updateGuide(_ item: NSMenuItem, _ historyItem: NSMenuItem, _ guide: UsageCoach.WeeklyGuide?) {
+        item.title = guide?.summary ?? ""
+        item.isHidden = guide == nil
+        historyItem.title = guide?.history ?? ""
+        historyItem.isHidden = guide == nil
+    }
+
     private func claudeRemaining(_ window: ClaudeRateLimitWindow) -> Int {
         max(0, min(100, 100 - Int(window.usedPercent.rounded())))
     }
@@ -905,21 +1099,35 @@ final class CombinedStatusController {
     private func renderCodex(_ snapshot: CodexUsageSnapshot) {
         let five = snapshot.fiveHour
         let week = snapshot.weekly
+        let now = Date()
+        // Codex 값은 방금 app-server에서 읽은 것이다. 다만 리셋 시각이 이미 지난 창이면 지난 창의 값이라 stale로 본다.
+        let fiveState = UsageFreshnessPolicy.evaluate(updatedAt: now, windowResetsAt: five?.resetsAt, now: now)
+        let weekState = UsageFreshnessPolicy.evaluate(updatedAt: now, windowResetsAt: week?.resetsAt, now: now)
         codexFiveHourItem.attributedTitle = nil
-        codexFiveHourItem.title = line(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(codexRemaining))
+        codexFiveHourItem.title = windowLine(label: "5H", resetsAt: five?.resetsAt, remaining: five.map(codexRemaining), state: fiveState)
         codexWeeklyItem.attributedTitle = nil
-        codexWeeklyItem.title = line(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(codexRemaining))
+        codexWeeklyItem.title = windowLine(label: "1W", resetsAt: week?.resetsAt, remaining: week.map(codexRemaining), state: weekState)
         let plan = snapshot.planType.map { $0.uppercased() } ?? tr("plan unknown", "계획 알 수 없음")
         let model = snapshot.model ?? tr("model unknown", "모델 알 수 없음")
         let effort = snapshot.reasoningEffort ?? tr("effort unknown", "강도 알 수 없음")
-        codexStatusItem.title = tr("Last checked: \(Self.timeFormatter.string(from: Date())) | \(plan) | \(model) | \(effort)", "최근 확인: \(Self.timeFormatter.string(from: Date())) | \(plan) | \(model) | \(effort)")
+        codexStatusItem.title = tr("Last checked: \(Self.timeFormatter.string(from: now)) | \(plan) | \(model) | \(effort)", "최근 확인: \(Self.timeFormatter.string(from: now)) | \(plan) | \(model) | \(effort)")
 
-        codexFiveText = five.map { "\(codexRemaining($0))" } ?? "—"
-        codexWeekText = week.map { "\(codexRemaining($0))" } ?? "—"
+        codexFiveText = (five != nil && fiveState == .fresh) ? "\(codexRemaining(five!))" : "—"
+        codexWeekText = (week != nil && weekState == .fresh) ? "\(codexRemaining(week!))" : "—"
         relayoutAndRender()
 
-        if let five { notifier.check(serviceName: "Codex", windowLabel: tr("5-hour", "5시간"), usedPercent: 100 - codexRemaining(five)) }
-        if let week { notifier.check(serviceName: "Codex", windowLabel: tr("weekly", "주간"), usedPercent: 100 - codexRemaining(week)) }
+        if let five, fiveState == .fresh {
+            notifier.check(serviceName: "Codex", windowLabel: tr("5-hour", "5시간"), usedPercent: 100 - codexRemaining(five))
+            notifier.checkPreReset(serviceName: "Codex", resetsAt: five.resetsAt, fiveHourRemaining: codexRemaining(five), weeklyRemaining: weekState == .fresh ? week.map(codexRemaining) : nil)
+        }
+        if let week, weekState == .fresh {
+            notifier.check(serviceName: "Codex", windowLabel: tr("weekly", "주간"), usedPercent: 100 - codexRemaining(week))
+        }
+        updateGuide(codexGuideItem, codexHistoryItem, coach.evaluate(
+            service: "Codex",
+            five: (fiveState == .fresh ? five : nil).map { .init(remaining: codexRemaining($0), resetsAt: $0.resetsAt) },
+            week: (weekState == .fresh ? week : nil).map { .init(remaining: codexRemaining($0), resetsAt: $0.resetsAt) }
+        ))
     }
 
     private func renderCodexError(_ error: Error) {
@@ -938,6 +1146,19 @@ final class CombinedStatusController {
     }
 
     // MARK: - Shared rendering helpers
+
+    /// 값이 믿을 만할 때만 "N% 남음"으로 보여 주고, 아니면 stale / unknown으로 표시한다.
+    private func windowLine(label: String, resetsAt: Date?, remaining: Int?, state: UsageFreshness) -> String {
+        switch state {
+        case .fresh:
+            return line(label: label, resetsAt: resetsAt, remaining: remaining)
+        case .stale:
+            guard let remaining else { return tr("\(label): no data", "\(label): 데이터 없음") }
+            return tr("\(label)  stale (last known: \(remaining)% left)", "\(label)  오래된 값 (마지막 확인: \(remaining)% 남음)")
+        case .unknown:
+            return tr("\(label)  unknown", "\(label)  알 수 없음")
+        }
+    }
 
     private func line(label: String, resetsAt: Date?, remaining: Int?) -> String {
         guard let remaining else { return tr("\(label): no data", "\(label): 데이터 없음") }

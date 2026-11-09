@@ -14,6 +14,12 @@ macOS 메뉴바 앱(Swift 6, SwiftPM, macOS 13+). Claude / Codex(ChatGPT)의 5�
 - `Localization.swift`: `tr(영어, 한국어)`. 시스템 언어가 한국어일 때만 한국어, 그 외 영어. 메뉴 "언어 / Language"에서 바꿈.
 - `PrivacyPreferences.swift`, `NotificationPreferences.swift`: 동의·알림 설정.
 
+## 정확성·테스트
+- `UsageFreshness.swift`: 값이 30분보다 오래됐거나 리셋 시각이 이미 지났으면 stale, 기록 시각이 없으면 unknown. 이런 값은 숫자로 표시하지 않고 알림·계획에도 쓰지 않는다.
+- Claude 토큰 갱신(`PrivacyPreferences.claudeTokenRenewal`)은 기본 꺼짐. 켜면 Claude Code 저장소를 다시 쓴다(파일은 권한 유지).
+- `Coach/`: 사용 계획·속도 알림·주간 가이드·남은 일. 알려 주기만 하고 모델은 호출하지 않는다. 약관상 모델 호출 자동화는 하지 않기로 했다.
+- 테스트: `./scripts/test.sh` (Swift Testing). CI: `.github/workflows/ci.yml`.
+
 ## 알림 훅 연동 (선택)
 Claude Code 훅 스크립트가 아래 두 가지로 이 앱과 연동할 수 있다(스크립트 자체는 저장소에 없다).
 - 클릭 주소: `aiusagebar://claude-session?id=<Desktop 세션 ID(local_…)>` → 그 세션이 열린 창이 있는 Space로 이동.
@@ -22,4 +28,4 @@ Claude Code 훅 스크립트가 아래 두 가지로 이 앱과 연동할 수 �
 ## 알아둘 점
 - 사용량 API와 Space 전환(CGS·단축키 합성)은 비공식·비공개 방식이라 macOS/Claude 업데이트로 깨질 수 있다.
 - 한 번 겪은 함정: 앱 프로세스가 launchd 밖에서 떠 있으면 `install.sh`가 새 빌드로 교체하지 못한다. 중복 방지(`AppDelegate`)가 있다.
-- 법적 고지는 README 하단(라이선스·상표·면책)에 있다. 라이선스: PolyForm Noncommercial 1.0.0.
+- README는 영어(`README.md`)와 한국어(`README.ko.md`) 두 파일이고 맨 위 링크로 오간다. 문서를 고치면 둘 다 맞춘다. 법적 고지는 각 README 하단(라이선스·상표·면책)에 있다. 라이선스: PolyForm Noncommercial 1.0.0.

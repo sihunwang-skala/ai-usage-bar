@@ -6,7 +6,9 @@ import Foundation
 /// 상관없이 항상 최신값을 얻을 수 있다. 비용은 HTTPS GET 1회뿐이다(화면 읽기처럼 UI를 건드리지 않는다).
 ///
 /// - Claude Code가 저장해 둔 OAuth 토큰을 읽어 api.anthropic.com 으로만 보낸다. 토큰은 메모리에만
-///   캐시하고 디스크 저장·로그 출력은 하지 않는다. 토큰 갱신(refresh)도 하지 않는다.
+///   캐시하고 로그에는 남기지 않는다.
+/// - 만료된 토큰의 자동 갱신(refresh)은 사용자가 따로 허용했을 때(`allowRenewal`)만 한다. 갱신하면 refresh token이
+///   바뀌어 Claude Code의 저장소(파일/키체인)를 이 앱이 다시 쓰게 되므로 기본은 끄고, 꺼져 있으면 만료 안내만 한다.
 /// - 비공식(undocumented) 엔드포인트다. 형식이 바뀌어 실패하면 기존 파일/화면 읽기가 대신 동작한다.
 final class ClaudeOAuthUsageReader: @unchecked Sendable {
     enum ReadError: LocalizedError {
@@ -41,9 +43,23 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
     private let lock = NSLock()
     private var cachedToken: String?
     private var cachedExpiry: Date?
+    private let session: URLSession
+    private let tokenProvider: (@Sendable (_ allowRenewal: Bool) async throws -> String)?
 
-    func fetch() async throws -> ClaudeUsageSnapshot {
-        let token = try await accessToken()
+    /// `session`과 `tokenProvider`는 테스트에서 가짜 서버·가짜 토큰을 쓰려고 바꿀 수 있게 열어 둔 것이다.
+    init(session: URLSession = .shared,
+         tokenProvider: (@Sendable (_ allowRenewal: Bool) async throws -> String)? = nil) {
+        self.session = session
+        self.tokenProvider = tokenProvider
+    }
+
+    func fetch(allowRenewal: Bool = false) async throws -> ClaudeUsageSnapshot {
+        let token: String
+        if let tokenProvider {
+            token = try await tokenProvider(allowRenewal)
+        } else {
+            token = try await accessToken(allowRenewal: allowRenewal)
+        }
 
         var request = URLRequest(url: Self.usageURL)
         request.timeoutInterval = 10
@@ -55,7 +71,7 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch {
             throw ReadError.network
         }
@@ -107,15 +123,15 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
 
     // MARK: - Token
 
-    private func accessToken() async throws -> String {
+    private func accessToken(allowRenewal: Bool) async throws -> String {
         if let token = validCachedToken() { return token }
         // security(1)·토큰 갱신 요청은 블로킹이라 협력 스레드를 막지 않게 분리한다.
         let credentials: (token: String, expiry: Date?)? = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 var stored = Self.readStored()
                 // 액세스 토큰은 8시간마다 만료되고, 터미널에서 claude를 안 쓰면 아무도 갱신하지 않는다.
-                // 만료됐을 때만 Claude Code와 같은 방식으로 refresh token을 써서 갱신하고 원래 자리에 다시 저장한다.
-                if let current = stored, Self.isExpiring(current.object) {
+                // 사용자가 허용했고 만료됐을 때만 Claude Code와 같은 방식으로 refresh token을 써서 갱신하고 원래 자리에 다시 저장한다.
+                if allowRenewal, let current = stored, Self.isExpiring(current.object) {
                     stored = Self.renew(current) ?? current
                 }
                 continuation.resume(returning: stored.flatMap { Self.parseCredentials($0.object) })
@@ -151,9 +167,9 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
         lock.unlock()
     }
 
-    private enum Store {
+    enum Store {
         case file(String)
-        case keychain
+        case keychain(account: String)
     }
 
     private static let credentialsFile = NSHomeDirectory() + "/.claude/.credentials.json"
@@ -176,12 +192,24 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
             timeout: 60
         ), let object = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
            parseCredentials(object) != nil {
-            return (object, .keychain)
+            return (object, .keychain(account: keychainAccount() ?? NSUserName()))
         }
         return nil
     }
 
-    private static func parseCredentials(_ object: [String: Any]) -> (token: String, expiry: Date?)? {
+    /// 키체인 항목의 계정 이름(비밀값 아님). 갱신한 값을 다른 항목으로 새로 만들지 않고 같은 항목에 덮어쓰려고 읽는다.
+    private static func keychainAccount() -> String? {
+        guard let output = run("/usr/bin/security", ["find-generic-password", "-s", keychainService], timeout: 30) else { return nil }
+        for line in output.split(separator: "\n") where line.contains("\"acct\"<blob>=") {
+            guard let first = line.firstIndex(of: "="), let open = line[first...].firstIndex(of: "\""),
+                  let close = line.lastIndex(of: "\""), open < close else { continue }
+            let value = String(line[line.index(after: open)..<close])
+            if !value.isEmpty { return value }
+        }
+        return nil
+    }
+
+    static func parseCredentials(_ object: [String: Any]) -> (token: String, expiry: Date?)? {
         guard let oauth = object["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
         let expiry = (oauth["expiresAt"] as? NSNumber).map {
@@ -190,7 +218,7 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
         return (token, expiry)
     }
 
-    private static func isExpiring(_ object: [String: Any]) -> Bool {
+    static func isExpiring(_ object: [String: Any]) -> Bool {
         guard let expiry = parseCredentials(object)?.expiry else { return false }
         return expiry.timeIntervalSinceNow < 60
     }
@@ -240,12 +268,29 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
         guard let data = try? JSONSerialization.data(withJSONObject: object) else { return false }
         switch store {
         case .file(let path):
-            return (try? data.write(to: URL(fileURLWithPath: path), options: [.atomic])) != nil
-        case .keychain:
+            return writeCredentialsFile(data, to: path)
+        case .keychain(let account):
             // 비밀값이 프로세스 목록(argv)에 드러나지 않게 security -i 의 표준입력으로 넘긴다.
             let hex = data.map { String(format: "%02x", $0) }.joined()
-            let command = "add-generic-password -U -a \"\(NSUserName())\" -s \"\(keychainService)\" -X \(hex)\n"
+            let command = "add-generic-password -U -a \"\(account)\" -s \"\(keychainService)\" -X \(hex)\n"
             return run("/usr/bin/security", ["-i"], input: command, timeout: 30) != nil
+        }
+    }
+
+    /// 자격 증명 파일을 안전하게 덮어쓴다. 새 파일을 만들 때부터 기존 권한(없으면 0600)으로 만들어,
+    /// 갱신 과정에서 다른 사용자가 읽을 수 있는 권한으로 잠깐이라도 노출되지 않게 한다.
+    static func writeCredentialsFile(_ data: Data, to path: String) -> Bool {
+        let fileManager = FileManager.default
+        let permissions = ((try? fileManager.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? 0o600
+        let temporary = path + ".aub-tmp"
+        try? fileManager.removeItem(atPath: temporary)
+        guard fileManager.createFile(atPath: temporary, contents: data, attributes: [.posixPermissions: permissions & 0o600]) else { return false }
+        do {
+            _ = try fileManager.replaceItemAt(URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: temporary))
+            return true
+        } catch {
+            try? fileManager.removeItem(atPath: temporary)
+            return false
         }
     }
 

@@ -349,11 +349,11 @@ final class CombinedStatusController {
         let quit = NSMenuItem(title: tr("Quit", "종료"), action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self
 
-        menu.addItem(claudeHeaderItem)
-        [claudeFiveHourItem!, claudeWeeklyItem!, claudeGuideItem, claudeHistoryItem, claudeStatusItem!].forEach { menu.addItem($0) }
-        menu.addItem(.separator())
         menu.addItem(codexHeaderItem)
         [codexFiveHourItem!, codexWeeklyItem!, codexGuideItem, codexHistoryItem, codexStatusItem!].forEach { menu.addItem($0) }
+        menu.addItem(.separator())
+        menu.addItem(claudeHeaderItem)
+        [claudeFiveHourItem!, claudeWeeklyItem!, claudeGuideItem, claudeHistoryItem, claudeStatusItem!].forEach { menu.addItem($0) }
         menu.addItem(.separator())
         // 1) 갱신·서비스
         menu.addItem(refreshItem)

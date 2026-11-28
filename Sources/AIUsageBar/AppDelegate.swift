@@ -5,11 +5,31 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var combinedController: CombinedStatusController?
 
+    /// 프로세스가 끝날 때까지 잡고 있는 배타 잠금. 이미 다른 인스턴스가 쥐고 있으면 false.
+    private static var lockFD: Int32 = -1
+    private static func acquireSingleInstanceLock() -> Bool {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AIUsageBar", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fd = open(dir.appendingPathComponent("instance.lock").path, O_CREAT | O_RDWR, 0o600)
+        guard fd >= 0 else { return true } // 잠금을 못 만들면 기존 검사에만 맡긴다.
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 { close(fd); return false }
+        lockFD = fd
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // LaunchAgent와 Finder/권한 창의 "다시 열기"가 겹치면 두 개가 뜬다. 먼저 떠 있던 쪽만 남긴다.
         let current = NSRunningApplication.current
-        if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
-            .contains(where: { $0 != current && !$0.isTerminated }) {
+        // 동시에 두 개가 뜨면 서로를 보고 둘 다 종료해 버리므로(부팅 직후 실제로 발생), 먼저 시작한 쪽(같으면 pid가 작은 쪽)만 남긴다.
+        func startedEarlier(_ other: NSRunningApplication) -> Bool {
+            let a = other.launchDate ?? .distantPast, b = current.launchDate ?? .distantPast
+            return a != b ? a < b : other.processIdentifier < current.processIdentifier
+        }
+        // 실행 목록은 막 뜬 프로세스를 아직 못 볼 수 있어(같은 순간에 뜨면 둘 다 통과) 파일 잠금으로 먼저 거른다.
+        if !Self.acquireSingleInstanceLock()
+            || NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+                .contains(where: { $0 != current && !$0.isTerminated && startedEarlier($0) }) {
             NSApp.terminate(nil)
             return
         }
@@ -27,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             PrivacyPreferences.askClaudeTokenConsent()
         }
         ClaudeWindowFocuser.shared.startTracking()
+        CodexWindowFocuser.shared.startTracking()
         combinedController = CombinedStatusController()
         combinedController?.start()
     }
@@ -58,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             switch service {
             case "Claude": ClaudeWindowFocuser.shared.focus()
-            case "Codex": GPTIconTarget.current.perform()
+            case "Codex": CodexWindowFocuser.shared.focus()
             default: break
             }
         }

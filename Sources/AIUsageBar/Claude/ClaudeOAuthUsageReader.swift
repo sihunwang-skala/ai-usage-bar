@@ -126,16 +126,31 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
     private func accessToken(allowRenewal: Bool) async throws -> String {
         if let token = validCachedToken() { return token }
         // security(1)·토큰 갱신 요청은 블로킹이라 협력 스레드를 막지 않게 분리한다.
-        let credentials: (token: String, expiry: Date?)? = await withCheckedContinuation { continuation in
+        let outcome: TokenLookup = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 var stored = Self.readStored()
                 // 액세스 토큰은 8시간마다 만료되고, 터미널에서 claude를 안 쓰면 아무도 갱신하지 않는다.
                 // 사용자가 허용했고 만료됐을 때만 Claude Code와 같은 방식으로 refresh token을 써서 갱신하고 원래 자리에 다시 저장한다.
                 if allowRenewal, let current = stored, Self.isExpiring(current.object) {
-                    stored = Self.renew(current) ?? current
+                    switch Self.renew(current) {
+                    case .renewed(let updated):
+                        stored = updated
+                    case .transient:
+                        // 네트워크·서버 일시 오류: 로그인이 풀린 게 아니므로 곧 다시 시도한다.
+                        continuation.resume(returning: .renewalUnavailable)
+                        return
+                    case .rejected:
+                        // 그 사이 Claude Code가 먼저 갱신(refresh token 교체)했을 수 있어 저장소를 한 번 더 읽는다.
+                        if let reread = Self.readStored(), !Self.isExpiring(reread.object) { stored = reread }
+                    }
                 }
-                continuation.resume(returning: stored.flatMap { Self.parseCredentials($0.object) })
+                continuation.resume(returning: .found(stored.flatMap { Self.parseCredentials($0.object) }))
             }
+        }
+        let credentials: (token: String, expiry: Date?)?
+        switch outcome {
+        case .renewalUnavailable: throw ReadError.network
+        case .found(let value): credentials = value
         }
         guard let credentials else { throw ReadError.noToken }
         if let expiry = credentials.expiry, expiry <= Date() {
@@ -143,6 +158,19 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
         }
         storeToken(credentials.token, expiry: credentials.expiry)
         return credentials.token
+    }
+
+    private enum TokenLookup {
+        case found((token: String, expiry: Date?)?)
+        case renewalUnavailable
+    }
+
+    private enum RenewResult {
+        case renewed((object: [String: Any], store: Store))
+        /// 서버가 refresh token을 거절했다(400/401). 다시 로그인해야 한다.
+        case rejected
+        /// 네트워크 오류·타임아웃·5xx 등. 로그인 상태와 무관하다.
+        case transient
     }
 
     private func storeToken(_ token: String, expiry: Date?) {
@@ -225,22 +253,25 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
 
     /// refresh token으로 새 액세스 토큰을 받아 원래 저장소에 다시 쓴다. refresh token도 함께 바뀌므로
     /// 저장에 실패하면 Claude Code 로그인이 풀린다(그때는 claude auth login 으로 다시 로그인).
-    private static func renew(_ stored: (object: [String: Any], store: Store)) -> (object: [String: Any], store: Store)? {
+    private static func renew(_ stored: (object: [String: Any], store: Store)) -> RenewResult {
         guard var oauth = stored.object["claudeAiOauth"] as? [String: Any],
               let refreshToken = oauth["refreshToken"] as? String, !refreshToken.isEmpty,
               let body = try? JSONSerialization.data(withJSONObject: [
                   "grant_type": "refresh_token",
                   "refresh_token": refreshToken,
                   "client_id": clientID
-              ]) else { return nil }
+              ]) else { return .rejected }
 
+        var sawRejection = false
         for url in tokenURLs {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 15
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
-            guard let data = synchronousData(for: request),
+            let (data, status) = synchronousData(for: request)
+            if status == 400 || status == 401 { sawRejection = true; continue }
+            guard let data,
                   let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let accessToken = response["access_token"] as? String, !accessToken.isEmpty else { continue }
 
@@ -255,13 +286,13 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
             object["claudeAiOauth"] = oauth
             guard write(object, to: stored.store) else {
                 print("[claude-token] renewed but failed to save")
-                return nil
+                return .transient
             }
             print("[claude-token] renewed via \(url.host ?? "")")
-            return (object, stored.store)
+            return .renewed((object, stored.store))
         }
-        print("[claude-token] renew failed")
-        return nil
+        print("[claude-token] renew failed (\(sawRejection ? "rejected" : "transient"))")
+        return sawRejection ? .rejected : .transient
     }
 
     private static func write(_ object: [String: Any], to store: Store) -> Bool {
@@ -294,19 +325,21 @@ final class ClaudeOAuthUsageReader: @unchecked Sendable {
         }
     }
 
-    private static func synchronousData(for request: URLRequest) -> Data? {
+    private static func synchronousData(for request: URLRequest) -> (Data?, Int?) {
         let done = DispatchSemaphore(value: 0)
         let box = ResultBox()
         URLSession.shared.dataTask(with: request) { data, response, _ in
-            if (response as? HTTPURLResponse)?.statusCode == 200 { box.data = data }
+            box.status = (response as? HTTPURLResponse)?.statusCode
+            if box.status == 200 { box.data = data }
             done.signal()
         }.resume()
         _ = done.wait(timeout: .now() + 20)
-        return box.data
+        return (box.data, box.status)
     }
 
     private final class ResultBox: @unchecked Sendable {
         var data: Data?
+        var status: Int?
     }
 
     private static func run(

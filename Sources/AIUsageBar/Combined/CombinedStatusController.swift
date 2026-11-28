@@ -81,6 +81,8 @@ final class CombinedStatusController {
     private let claudeOAuthReader = ClaudeOAuthUsageReader()
     private var claudeAPISnapshot: ClaudeUsageSnapshot?
     private var claudeAPIError: String?
+    /// 실시간 조회에 필요한 Claude Code 로그인이 없거나 만료됨. 메뉴에 로그인 항목을 보이고 알림은 한 번만 보낸다.
+    private var claudeNeedsLogin = false
     private var isClaudeAPIRefreshing = false
     private var nextClaudeAPIAttempt = Date.distantPast
     private static let claudeAPIMinInterval: TimeInterval = 120
@@ -819,6 +821,13 @@ final class CombinedStatusController {
         lastClaudeAccessibilityRefresh = nil
         refreshClaudeAccessibility(force: true)
     }
+    /// 터미널을 열어 `claude auth login`을 실행한다. 로그인이 끝나면 다음 갱신에서 자동으로 다시 읽는다.
+    @objc private func openClaudeLogin() {
+        let script = NSAppleScript(source: "tell application \"Terminal\"\nactivate\ndo script \"claude auth login\"\nend tell")
+        var error: NSDictionary?
+        script?.executeAndReturnError(&error)
+        nextClaudeAPIAttempt = Date().addingTimeInterval(15)
+    }
     @objc private func refreshClicked() {
         nextClaudeAPIAttempt = .distantPast
         refreshClaude()
@@ -909,6 +918,7 @@ final class CombinedStatusController {
         isClaudeAPIRefreshing = false
         claudeAPISnapshot = snapshot
         claudeAPIError = nil
+        claudeNeedsLogin = false
         print("[claude-api] ok 5h=\(snapshot.fiveHour?.usedPercent ?? -1) 7d=\(snapshot.weekly?.usedPercent ?? -1)")
         refreshClaude()
     }
@@ -917,6 +927,18 @@ final class CombinedStatusController {
         isClaudeAPIRefreshing = false
         claudeAPIError = error.localizedDescription
         print("[claude-api] fail \(error.localizedDescription)")
+        switch error as? ClaudeOAuthUsageReader.ReadError {
+        case .tokenExpired?, .noToken?:
+            if !claudeNeedsLogin {
+                claudeNeedsLogin = true
+                notifier.notify(
+                    title: tr("Claude sign-in needed", "Claude 로그인이 필요해요"),
+                    message: tr("Live Claude usage is paused. Click the menu bar icon → “Sign in to Claude Code…”.", "Claude 실시간 사용량이 멈췄어요. 메뉴바 아이콘 → “Claude Code 로그인…”을 눌러 주세요."),
+                    serviceName: "Claude")
+            }
+        default:
+            break
+        }
         var wait = Self.claudeAPIRetryInterval
         if case .rateLimited = error as? ClaudeOAuthUsageReader.ReadError { wait = Self.claudeAPIRateLimitedInterval }
         nextClaudeAPIAttempt = Date().addingTimeInterval(wait)
@@ -1031,6 +1053,12 @@ final class CombinedStatusController {
 
     private func updateClaudeConnectMenuItem() {
         guard claudeConnectItem != nil else { return }
+        if claudeNeedsLogin {
+            claudeConnectItem.title = tr("Sign in to Claude Code… (live usage paused)", "Claude Code 로그인… (실시간 사용량 중단됨)")
+            claudeConnectItem.action = #selector(openClaudeLogin)
+            return
+        }
+        claudeConnectItem.action = #selector(refreshClaudeFromDesktop)
         claudeConnectItem.title = ClaudeDesktopAccessibilityReader.isTrusted
             ? tr("Re-read latest Claude Desktop usage", "Claude Desktop 최신 사용량 다시 읽기")
             : tr("Connect latest Claude Desktop usage…", "Claude Desktop 최신 사용량 연결…")

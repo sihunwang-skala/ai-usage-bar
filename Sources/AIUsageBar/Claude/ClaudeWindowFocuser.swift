@@ -190,7 +190,7 @@ final class ClaudeWindowFocuser {
     }
 
     /// 앞쪽 창부터 정렬된 Claude의 일반 창 ID. 크기가 작은 보조 창(툴팁·팝오버 등)은 제외한다.
-    private static func claudeWindowIDs(pid: pid_t, onScreenOnly: Bool) -> [CGWindowID] {
+    static func claudeWindowIDs(pid: pid_t, onScreenOnly: Bool) -> [CGWindowID] {
         let options: CGWindowListOption = onScreenOnly
             ? [.optionOnScreenOnly, .excludeDesktopElements]
             : [.optionAll]
@@ -297,15 +297,15 @@ final class ClaudeWindowFocuser {
         let space = window.flatMap { Self.spaceID(ofWindow: $0) }
             ?? sessionSpaces[sessionID]
         print("[focus] click session=\(sessionID) titled=\(titled.map(String.init) ?? "nil") learned=\(learned.map(String.init) ?? "nil") space=\(space.map(String.init) ?? "nil")")
-        bring(window: window, space: space, pid: pid)
+        Self.bring(window: window, space: space, pid: pid)
     }
 
     private func bring(_ target: CGWindowID?, pid: pid_t) {
-        bring(window: target, space: target.flatMap { Self.spaceID(ofWindow: $0) }, pid: pid)
+        Self.bring(window: target, space: target.flatMap { Self.spaceID(ofWindow: $0) }, pid: pid)
     }
 
     /// `afterArrival`은 그 Space에 도착한 뒤(또는 이동이 필요 없을 때) 한 번 실행한다.
-    private func bring(window: CGWindowID?, space: UInt64?, pid: pid_t, afterArrival: (() -> Void)? = nil) {
+    static func bring(window: CGWindowID?, space: UInt64?, pid: pid_t, afterArrival: (() -> Void)? = nil) {
         guard let space else {
             print("[focus] no target window/space for this session, doing nothing")
             afterArrival?()
@@ -348,7 +348,7 @@ final class ClaudeWindowFocuser {
     }
 
     /// 창이 속한 Space ID.
-    private static func spaceID(ofWindow windowID: CGWindowID) -> UInt64? {
+    static func spaceID(ofWindow windowID: CGWindowID) -> UInt64? {
         guard let mainConnection = symbol("CGSMainConnectionID", as: MainConnectionFn.self),
               let spacesForWindows = symbol("CGSCopySpacesForWindows", as: SpacesForWindowsFn.self) else { return nil }
         let windows = [NSNumber(value: windowID)] as CFArray
